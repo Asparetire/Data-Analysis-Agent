@@ -1,0 +1,25 @@
+name: data-analysis-agent
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Python 版本
+  - python=3.11
+
+  # 后端框架 & 工具
+  - fastapi>=0.104.0
+  - uvicorn>=0.24.0
+  - pydantic-settings>=2.1.0
+  - python-dotenv>=1.0.0
+  - python-multipart>=0.0.6
+
+  # 数据处理 & 分析
+  - numpy>=1.24.0
+  - pandas>=2.1.0
+  - matplotlib>=3.8.0
+  - openpyxl>=3.1.0
+  - xlrd>=2.0.0
+
+  # 数据库 & 缓存
+  - sqlalchemy>=2.0.0
+  - redis>=5.0.0
