@@ -6,7 +6,7 @@ import pandas as pd
 from fastapi import UploadFile
 
 from ..config import settings
-from ..utils.database import SQLITE_DIR, get_engine
+from ..utils.database import SQLITE_DIR, dispose_engine, get_engine
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -69,6 +69,19 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
         upload_path.unlink(missing_ok=True)
         raise ValueError("File contains no rows")
 
+    # Normalize columns whose name is empty or duplicates.
+    seen: dict[str, int] = {}
+    new_cols = []
+    for col in df.columns:
+        name = str(col).strip() or "column"
+        if name in seen:
+            seen[name] += 1
+            new_cols.append(f"{name}_{seen[name]}")
+        else:
+            seen[name] = 0
+            new_cols.append(name)
+    df.columns = new_cols
+
     engine = get_engine(file_id)
     df.to_sql(UPLOAD_TABLE, engine, if_exists="replace", index=False)
     logger.info(
@@ -93,6 +106,36 @@ def get_sample_rows(data_source_id: str, limit: int = 5):
                 {"n": limit},
             )
             cols = result.keys()
-            return [dict(zip(cols, row)) for row in result.fetchall()]
+            return [dict(zip(cols, row, strict=False)) for row in result.fetchall()]
     except Exception:
         return None
+
+
+def delete_data_source(data_source_id: str) -> bool:
+    """Remove the uploaded file, the SQLite database, and drop the cached engine.
+
+    Returns True if at least one of (uploaded file, sqlite db) existed.
+    Safe to call on a non-existent id -- it will simply report False.
+    """
+    deleted = False
+    uploads_dir = _uploads_dir()
+    for path in uploads_dir.iterdir():
+        if path.stem == data_source_id and path.suffix.lower() in {
+            ".csv",
+            ".xlsx",
+            ".xls",
+            ".json",
+        }:
+            path.unlink(missing_ok=True)
+            deleted = True
+            break
+
+    sqlite_path = SQLITE_DIR / f"{data_source_id}.db"
+    if sqlite_path.exists():
+        sqlite_path.unlink()
+        deleted = True
+
+    # Always drop the engine, even if neither file existed: a previous run
+    # could have left a cached engine pointing at a deleted file.
+    dispose_engine(data_source_id)
+    return deleted

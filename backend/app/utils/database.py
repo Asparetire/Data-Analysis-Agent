@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from threading import Lock
-from typing import Optional
 
 from sqlalchemy import Engine, create_engine
 from sqlalchemy.pool import StaticPool
@@ -23,11 +21,10 @@ def _sqlite_path(data_source_id: str) -> str:
     return str(SQLITE_DIR / f"{safe}.db")
 
 
-def get_engine(data_source_id: Optional[str] = None) -> Engine:
+def get_engine(data_source_id: str | None = None) -> Engine:
     """根据 data_source_id 返回一个 SQLAlchemy engine。
-
-    - 没传 id：返回主库 engine（用于会话/元数据等）
-    - 传了 id：返回指向 data/sqlite/{id}.db 的独立 SQLite 文件
+    - 不传 id：返回主库 engine（用于会话元数据等）。
+    - 传了 id：返回指向 data/sqlite/{id}.db 的独立 SQLite 文件。
     """
     key = data_source_id or "_default"
     if key in _engines:
@@ -53,6 +50,15 @@ def get_engine(data_source_id: Optional[str] = None) -> Engine:
             )
         _engines[key] = engine
         return engine
+
+
+def dispose_engine(data_source_id: str | None) -> None:
+    """Dispose and forget the cached engine for a single data source."""
+    key = data_source_id or "_default"
+    with _lock:
+        engine = _engines.pop(key, None)
+    if engine is not None:
+        engine.dispose()
 
 
 def dispose_all() -> None:

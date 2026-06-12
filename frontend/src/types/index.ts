@@ -2,22 +2,38 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
-  chartData?: any;
+  /**
+   * Chart payload from the backend. The agent emits an ECharts option dict
+   * in the common path, but the raw `chart_data` from the LLM tool can also
+   * be any structured object, so we type it as `unknown` and let consumers
+   * narrow (see `isChartOption` in ChatWindow).
+   */
+  chartData?: unknown;
   sqlQuery?: string;
+  /** Streamed row payloads, populated by /chat/stream chunks. */
+  data_chunks?: Record<string, unknown>[];
+}
+
+export interface ChatMessageItem {
+  role: 'user' | 'assistant';
+  content: string;
+  chart_data?: unknown;
+  sql_query?: string;
+  timestamp?: string;
 }
 
 export interface ChatResponse {
   session_id: string;
   message: string;
-  chart_data?: any;
-  sql_query?: string;
+  chart_data?: unknown;
+  sql_query?: string | null;
   error?: string;
 }
 
 export interface DataSource {
   id: string;
   name: string;
-  type: 'csv' | 'excel' | 'database';
+  type: 'csv' | 'excel' | 'json' | 'database';
   created_at: string;
 }
 
@@ -26,4 +42,15 @@ export interface UploadResponse {
   filename: string;
   status: string;
   message: string;
+}
+
+export interface SessionView {
+  session_id: string;
+  data_source_id?: string | null;
+  chat_history: ChatMessageItem[];
+  intermediate_results?: unknown;
+  last_query?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  ttl_seconds: number;
 }

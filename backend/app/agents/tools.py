@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from typing import List, Optional
 
 from langchain_core.tools import tool
 from sqlalchemy import text
@@ -41,7 +40,7 @@ def _wrap_with_limit(sql: str, limit: int) -> str:
     return f"SELECT * FROM ({s}) AS _sub LIMIT {limit}"
 
 
-def build_tools(data_source_id: Optional[str]) -> List:
+def build_tools(data_source_id: str | None) -> list:
     engine = get_engine(data_source_id)
 
     @tool
@@ -57,7 +56,7 @@ def build_tools(data_source_id: Optional[str]) -> List:
                 rows = result.fetchall()
                 cols = list(result.keys())
             data = [
-                dict(zip(cols, [str(c) if c is not None else None for c in row]))
+                dict(zip(cols, [str(c) if c is not None else None for c in row], strict=False))
                 for row in rows
             ]
             return json.dumps(
@@ -76,13 +75,8 @@ def build_tools(data_source_id: Optional[str]) -> List:
         try:
             with engine.connect() as conn:
                 rows = conn.execute(text(f'PRAGMA table_info("{UPLOAD_TABLE}")')).fetchall()
-                schema = [
-                    {"name": row[1], "type": row[2], "nullable": not row[3]}
-                    for row in rows
-                ]
-                count = conn.execute(
-                    text(f'SELECT COUNT(*) FROM "{UPLOAD_TABLE}"')
-                ).scalar()
+                schema = [{"name": row[1], "type": row[2], "nullable": not row[3]} for row in rows]
+                count = conn.execute(text(f'SELECT COUNT(*) FROM "{UPLOAD_TABLE}"')).scalar()
             return json.dumps(
                 {"table": UPLOAD_TABLE, "row_count": count, "columns": schema},
                 ensure_ascii=False,
@@ -90,8 +84,32 @@ def build_tools(data_source_id: Optional[str]) -> List:
         except SQLAlchemyError as e:
             return json.dumps({"error": f"SQL error: {e}"}, ensure_ascii=False)
 
-    tools_list = [query_database, get_table_schema]
+    @tool
+    def create_chart(
+        chart_type: str,
+        title: str,
+        x_data: list[str],
+        series: list[dict],
+    ) -> str:
+        """Register a chart to render alongside the assistant's reply.
+
+        Args:
+            chart_type: One of 'bar', 'line', 'pie'.
+            title: Chart title shown above the plot.
+            x_data: Category labels for the x-axis (or slice names for pie).
+            series: List of series, each like {"name": "Sales", "data": [120, 95, 71]}.
+        """
+        # The post_process node picks these args up out of tool_calls and
+        # converts them into an ECharts option dict. Returning a small ack
+        # is enough for the LLM to know the call succeeded.
+        return json.dumps(
+            {"status": "ok", "chart_type": chart_type, "series_count": len(series)},
+            ensure_ascii=False,
+        )
+
+    tools_list = [query_database, get_table_schema, create_chart]
     if data_source_id is None:
+
         @tool
         def no_data_loaded() -> str:
             """Indicate that no data source has been uploaded yet."""
@@ -99,5 +117,6 @@ def build_tools(data_source_id: Optional[str]) -> List:
                 {"error": "No data source loaded. Ask the user to upload a CSV/Excel file first."},
                 ensure_ascii=False,
             )
+
         tools_list.append(no_data_loaded)
     return tools_list

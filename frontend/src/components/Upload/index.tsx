@@ -1,86 +1,127 @@
-import React, { useState } from 'react';
-import { Upload, FileText, CheckCircle, Loader2 } from 'lucide-react';
-import { uploadFile } from '../../services/api';
+import { useCallback, useRef, type ChangeEvent, type DragEvent, type KeyboardEvent } from 'react';
+import { Upload, FileText, CheckCircle, Loader2, AlertCircle, RotateCcw } from 'lucide-react';
+import { useUpload } from '../../hooks/useUpload';
 import './FileUpload.css';
 
 interface FileUploadProps {
-  onUploadSuccess: (fileId: string, filename: string) => void;
+  /** Called after a successful upload so the parent can react (e.g. switch page). */
+  onUploadSuccess?: (fileId: string, filename: string) => void;
 }
 
-const FileUpload: React.FC<FileUploadProps> = ({ onUploadSuccess }) => {
-  const [isDragging, setIsDragging] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadedFile, setUploadedFile] = useState<string | null>(null);
+export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
+  const { upload, reset, status, error, fileName } = useUpload();
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
+  const handleFile = useCallback(
+    async (file: File) => {
+      const result = await upload(file);
+      if (result && onUploadSuccess) onUploadSuccess(result.fileId, result.filename);
+    },
+    [upload, onUploadSuccess],
+  );
 
-  const handleDragLeave = (e: React.DragEvent) => {
+  const onDrop = (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files[0];
+    const file = e.dataTransfer.files?.[0];
     if (file) handleFile(file);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onChange = (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) handleFile(file);
+    // Allow the same file to be re-selected later.
+    e.target.value = '';
   };
 
-  const handleFile = async (file: File) => {
-    setIsUploading(true);
-    try {
-      const response = await uploadFile(file);
-      setUploadedFile(response.filename);
-      onUploadSuccess(response.file_id, response.filename);
-    } catch (error) {
-      console.error('Upload failed:', error);
-    } finally {
-      setIsUploading(false);
+  const onClickArea = () => {
+    if (status === 'idle' || status === 'error') {
+      inputRef.current?.click();
+    }
+  };
+
+  const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onClickArea();
     }
   };
 
   return (
     <div className="file-upload">
       <div
-        className={`upload-area ${isDragging ? 'dragging' : ''}`}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
+        className={`upload-area ${status === 'uploading' ? 'uploading' : ''} ${
+          status === 'success' ? 'uploaded' : ''
+        }`}
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={onDrop}
+        onClick={onClickArea}
+        onKeyDown={onKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-label="Upload data file"
       >
-        {isUploading ? (
+        {status === 'uploading' ? (
           <div className="uploading">
-            <Loader2 className="animate-spin" />
-            <p>上传中...</p>
+            <Loader2 className="spin" size={28} />
+            <p>上传中…</p>
           </div>
-        ) : uploadedFile ? (
+        ) : status === 'success' ? (
           <div className="uploaded">
-            <CheckCircle className="text-green-500" />
-            <p>{uploadedFile}</p>
+            <CheckCircle size={28} />
+            <p title={fileName ?? ''}>{fileName}</p>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                reset();
+              }}
+              style={{
+                marginTop: 4,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 12,
+                background: 'transparent',
+                border: '1px solid var(--color-border)',
+                color: 'var(--color-text-muted)',
+                padding: '4px 8px',
+                borderRadius: 6,
+              }}
+            >
+              <RotateCcw size={12} /> 重新上传
+            </button>
           </div>
         ) : (
           <>
-            <Upload size={48} className="text-gray-400" />
-            <p>拖拽文件到此处，或点击选择文件</p>
-            <p className="text-sm text-gray-500">支持 CSV、Excel 文件</p>
+            <Upload size={32} color="var(--color-text-muted)" />
+            <p>点击或拖拽文件到此处</p>
+            <p className="supported-formats">支持 CSV / Excel / JSON (≤50MB)</p>
             <input
+              ref={inputRef}
               type="file"
-              accept=".csv,.xlsx,.xls"
-              onChange={handleFileChange}
+              accept=".csv,.xlsx,.xls,.json"
+              onChange={onChange}
               className="file-input"
             />
           </>
         )}
       </div>
+
+      {status === 'error' && error ? (
+        <div className="upload-error" role="alert">
+          <AlertCircle size={14} style={{ verticalAlign: -2, marginRight: 4 }} />
+          {error}
+        </div>
+      ) : null}
+
+      {status === 'idle' || status === 'error' ? (
+        <div
+          className="supported-formats"
+          style={{ display: 'flex', alignItems: 'center', gap: 4 }}
+        >
+          <FileText size={12} /> 文件会被解析到独立 SQLite 数据库
+        </div>
+      ) : null}
     </div>
   );
-};
-
-export default FileUpload;
+}

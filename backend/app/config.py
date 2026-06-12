@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import warnings
-from typing import List, Optional
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,9 +23,9 @@ class Settings(BaseSettings):
     # LLM
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
-    OPENAI_BASE_URL: Optional[str] = None
+    OPENAI_BASE_URL: str | None = None
 
-    # 主库（用于会话/元数据，data_source 业务表走独立 SQLite 文件）
+    # 主库（用于会话元数据等，data_source 业务表走独立 SQLite 文件）
     DATABASE_URL: str = "sqlite:///./data/main.db"
 
     # 数据目录
@@ -35,8 +34,8 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
 
-    # CORS：从环境变量读 JSON 字符串，例：'["http://localhost:5173"]'
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://localhost:3000"]
+    # CORS：从环境变量读 JSON 字符串，例如 '["http://localhost:5173"]'
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
