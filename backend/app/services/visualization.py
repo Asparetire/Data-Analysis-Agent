@@ -544,7 +544,7 @@ def _build_config_from_llm(
 
     config = ChartConfigSpec(title=sanitize_text(title) if title else None)
     series_names = [
-        sanitize_field_name(s.get("name") or f"series_{i+1}") for i, s in enumerate(series)
+        sanitize_field_name(s.get("name") or f"series_{i + 1}") for i, s in enumerate(series)
     ]
     config.color = ColorSpec(
         field=None,
