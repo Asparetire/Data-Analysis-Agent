@@ -493,13 +493,23 @@ def _build_config_from_data(
 
     if chart_type == ChartType.PIE:
         if category_cols and numeric_cols:
-            config.xField = category_cols[0]
-            config.yField = numeric_cols[0]
+            x_col = category_cols[0]
+            y_col = numeric_cols[0]
+            config.xField = x_col
+            config.yField = y_col
             n = max(1, min(len(DEFAULT_PALETTE), df[category_cols[0]].nunique(dropna=True)))
             config.color = ColorSpec(
-                field=category_cols[0],
+                field=x_col,
                 values=DEFAULT_PALETTE[:n],
             )
+            # PIE's wire format is [{name, value}, ...], not the column-name
+            # shape BAR/LINE use. echarts_from_spec reads r.get("name"/"value"),
+            # so we project to that shape here.
+            rows = [
+                {"name": str(r.get(x_col, "")), "value": r.get(y_col)}
+                for r in rows
+                if r.get(x_col) is not None
+            ]
         return config, rows
 
     # BAR / LINE

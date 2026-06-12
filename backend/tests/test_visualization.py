@@ -120,6 +120,26 @@ def test_echarts_pie_emits_pie_series():
     assert opt is not None
     assert opt["series"][0]["type"] == "pie"
     assert len(opt["series"][0]["data"]) == 3
+    # PIE rows must be in the {name, value} wire shape -- not the raw column
+    # shape. ECharts would render blank slices otherwise.
+    assert opt["series"][0]["data"] == [
+        {"name": "A", "value": 1},
+        {"name": "B", "value": 2},
+        {"name": "C", "value": 3},
+    ]
+
+
+def test_echarts_pie_after_user_override_uses_name_value_shape():
+    """The override path (_build_config_from_data) must produce the same shape."""
+    df = pd.DataFrame({"region": ["A", "B"], "rev": [10, 20]})
+    spec = build_chart_spec(df=df, user_query="改成饼图")
+    opt = echarts_from_spec(spec)
+    assert opt is not None
+    assert opt["series"][0]["type"] == "pie"
+    assert opt["series"][0]["data"] == [
+        {"name": "A", "value": 10},
+        {"name": "B", "value": 20},
+    ]
 
 
 def test_echarts_table_returns_none():

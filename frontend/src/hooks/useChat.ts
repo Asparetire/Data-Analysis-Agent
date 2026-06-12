@@ -76,6 +76,9 @@ export function useChat() {
           if (controller.signal.aborted) break;
           handleStreamEvent(evt, activeSessionId, setSessionId);
         }
+        if (controller.signal.aborted) {
+          patchLastAssistant({ content: '(已停止生成)' });
+        }
       } catch (err) {
         patchLastAssistant({ content: `Request failed: ${describeStreamError(err)}` });
       } finally {
