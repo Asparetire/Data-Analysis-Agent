@@ -1,0 +1,47 @@
+# Shared config for the Python tooling the pre-commit hooks (and devs' IDEs)
+# pick up. Keep this in the repo root so ruff/black resolve it from anywhere.
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  \.git
+  | \.venv
+  | build
+  | dist
+  | data
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["data", "build", "dist", ".venv"]
+
+[tool.ruff.lint]
+# A pragmatic baseline: catches real bugs, leaves style to black/ruff-format.
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line length (black handles it)
+    "B008",  # function call in default argument (FastAPI Depends pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can be a little looser.
+"backend/tests/**/*.py" = ["B011"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"

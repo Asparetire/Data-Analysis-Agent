@@ -10,11 +10,14 @@ services:
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=gpt-4o
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - ./backend/app/data:/app/app/data
     depends_on:
       - redis
 
+  # 前端是纯静态/浏览器侧 SPA，LLM 调用走 backend，因此无需注入 OPENAI_API_KEY。
+  # 若后续在前端直接调用 LLM SDK，请用 VITE_OPENAI_API_KEY 并从 .env 注入。
   frontend:
     build:
       context: ./frontend

@@ -1,0 +1,46 @@
+# Pre-commit hooks for the Data Analysis Agent repo.
+#
+# Install once after cloning:
+#   pip install pre-commit
+#   pre-commit install
+# Then every `git commit` will run these checks on staged files.
+# Run manually across the whole repo with:  pre-commit run --all-files
+#
+# Backend hooks (ruff, black) are pinned upstream versions.
+# Frontend hooks (prettier, eslint) are local: they call the binaries
+# installed in frontend/node_modules so the version is always in sync
+# with package.json (the upstream mirrors are stale for prettier and
+# would install a different prettier than the one in the project).
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--fix, --exit-non-zero-on-fix]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        files: ^backend/
+
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier (check)
+        entry: D:/soft/anaconda/envs/data-analysis-agent/python.exe tools/precommit_prettier.py
+        language: system
+        files: ^frontend/.*\.(ts|tsx|js|jsx|css|json|md)$
+        types: [file]
+
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: D:/soft/anaconda/envs/data-analysis-agent/python.exe tools/precommit_eslint.py
+        language: system
+        files: ^frontend/src/.*\.(ts|tsx)$
+        types: [file]

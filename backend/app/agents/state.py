@@ -1,13 +1,23 @@
-from typing import TypedDict, List, Optional, Annotated
-from langgraph.graph.message import add_messages
+from __future__ import annotations
+
+from typing import Annotated, Any, TypedDict
+
 from langchain_core.messages import BaseMessage
+from langgraph.graph.message import add_messages
+
 
 class AgentState(TypedDict):
-    """LangGraph Agent状态定义"""
-    messages: Annotated[List[BaseMessage], add_messages]
+    """LangGraph agent state.
+
+    `messages` is the canonical conversation log; the rest are scratch fields
+    the agent fills in along the way.
+    """
+
+    messages: Annotated[list[BaseMessage], add_messages]
     session_id: str
-    data_source_id: Optional[str]
-    sql_query: Optional[str]
-    analysis_result: Optional[str]
-    chart_data: Optional[dict]
-    error: Optional[str]
+    data_source_id: str | None
+    sql_query: str | None
+    analysis_result: Any | None
+    chart_data: dict | None
+    chart_spec: dict | None
+    error: str | None
