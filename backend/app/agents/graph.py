@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Sequence
 from typing import Any
 
@@ -11,6 +10,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
+from ..config import settings
 from .state import AgentState
 from .tools import build_tools
 
@@ -29,11 +29,19 @@ SYSTEM_PROMPT = """你是一个专业的数据分析助手。用户会先上传 
 
 
 def _build_llm(temperature: float = 0):
-    return ChatOpenAI(
-        model=os.getenv("OPENAI_MODEL", "gpt-4o"),
-        temperature=temperature,
-        streaming=True,
-    )
+    # Pull the key / base URL from pydantic settings (which reads .env),
+    # not from os.getenv -- pydantic-loaded values never make it into
+    # the process env, so ChatOpenAI would otherwise see no credentials.
+    kwargs: dict[str, Any] = {
+        "model": settings.OPENAI_MODEL,
+        "temperature": temperature,
+        "streaming": True,
+    }
+    if settings.OPENAI_API_KEY:
+        kwargs["api_key"] = settings.OPENAI_API_KEY
+    if settings.OPENAI_BASE_URL:
+        kwargs["base_url"] = settings.OPENAI_BASE_URL
+    return ChatOpenAI(**kwargs)
 
 
 def _find_create_chart_args(messages) -> dict | None:

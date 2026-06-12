@@ -13,6 +13,7 @@ import pandas as pd
 from app.services.visualization import (
     MAX_ROWS,
     ChartType,
+    _coerce_to_list,
     apply_user_overrides,
     build_chart_spec,
     echarts_from_spec,
@@ -145,3 +146,32 @@ def test_echarts_pie_after_user_override_uses_name_value_shape():
 def test_echarts_table_returns_none():
     spec = build_chart_spec(df=pd.DataFrame(), user_query="")
     assert echarts_from_spec(spec) is None
+
+
+# ---------------------------------------------------------------------------
+# _coerce_to_list
+# ---------------------------------------------------------------------------
+
+
+def test_coerce_to_list_passes_lists_through():
+    assert _coerce_to_list([1, 2, 3]) == [1, 2, 3]
+
+
+def test_coerce_to_list_handles_dict_with_values_key():
+    # Common LLM slip: {"values": [...]}.
+    assert _coerce_to_list({"values": [10, 20]}) == [10, 20]
+
+
+def test_coerce_to_list_handles_dict_with_int_string_keys():
+    # Another slip: {"0": 1, "1": 2, "2": 3}.
+    assert _coerce_to_list({"0": 1, "1": 2, "2": 3}) == [1, 2, 3]
+
+
+def test_coerce_to_list_wraps_scalar():
+    assert _coerce_to_list(5) == [5]
+    assert _coerce_to_list("hello") == ["hello"]
+
+
+def test_coerce_to_list_returns_empty_for_none_and_empty_string():
+    assert _coerce_to_list(None) == []
+    assert _coerce_to_list("") == []

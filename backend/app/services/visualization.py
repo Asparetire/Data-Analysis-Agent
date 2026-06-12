@@ -553,7 +553,7 @@ def _build_config_from_llm(
 
     if chart_type == ChartType.PIE:
         first = series[0] if series else {}
-        first_data = first.get("data") or []
+        first_data = _coerce_to_list(first.get("data"))
         rows = []
         for i, x in enumerate(x_data):
             value = first_data[i] if i < len(first_data) else None
@@ -564,11 +564,35 @@ def _build_config_from_llm(
     for i, x in enumerate(x_data):
         row: dict[str, Any] = {"_x": sanitize_text(x)}
         for sname, s in zip(series_names, series, strict=False):
-            data = s.get("data") or []
+            data = _coerce_to_list(s.get("data"))
             if i < len(data):
                 row[sname] = data[i]
         rows.append(row)
     return chart_type, config, rows
+
+
+def _coerce_to_list(value: Any) -> list[Any]:
+    """LLM tool args don't always honor the documented list shape.
+
+    `series[].data` is supposed to be a flat list of numbers, but the model
+    sometimes returns a dict, a string, or a single value. Coerce defensively
+    so post_process never crashes on a contract slip.
+    """
+    if isinstance(value, list):
+        return value
+    if isinstance(value, tuple):
+        return list(value)
+    if isinstance(value, dict):
+        # Common LLM slip: {"values": [...]} or {"0": ..., "1": ...}.
+        if "values" in value and isinstance(value["values"], list):
+            return value["values"]
+        try:
+            return [value[str(i)] for i in range(len(value))]
+        except (KeyError, TypeError):
+            return [value]
+    if value is None or value == "":
+        return []
+    return [value]
 
 
 def build_chart_spec(
