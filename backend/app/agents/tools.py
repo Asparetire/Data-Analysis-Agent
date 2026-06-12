@@ -24,12 +24,12 @@ _FORBIDDEN_CHARS = re.compile(r"[;`]")
 
 def _is_safe_select(sql: str):
     s = sql.strip().rstrip(";")
-    if not s.lower().startswith("select") and not s.lower().startswith("with"):
-        return "Only SELECT/WITH queries are allowed."
     if _FORBIDDEN_KEYWORDS.search(s):
         return "Query contains forbidden keywords."
     if _FORBIDDEN_CHARS.search(s):
         return "Query contains forbidden characters (; ` )."
+    if not s.lower().startswith("select") and not s.lower().startswith("with"):
+        return "Only SELECT/WITH queries are allowed."
     return None
 
 

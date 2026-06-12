@@ -117,6 +117,10 @@ def delete_data_source(data_source_id: str) -> bool:
     Returns True if at least one of (uploaded file, sqlite db) existed.
     Safe to call on a non-existent id -- it will simply report False.
     """
+    # Drop the cached engine first. On Windows the engine keeps the .db file
+    # mapped, so unlinking it without disposing first raises PermissionError.
+    dispose_engine(data_source_id)
+
     deleted = False
     uploads_dir = _uploads_dir()
     for path in uploads_dir.iterdir():
@@ -135,7 +139,4 @@ def delete_data_source(data_source_id: str) -> bool:
         sqlite_path.unlink()
         deleted = True
 
-    # Always drop the engine, even if neither file existed: a previous run
-    # could have left a cached engine pointing at a deleted file.
-    dispose_engine(data_source_id)
     return deleted
