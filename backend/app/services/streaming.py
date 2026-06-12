@@ -212,6 +212,18 @@ async def stream_chat(
     sql_query = result.get("sql_query")
     query_result = result.get("analysis_result")
 
+    # Safety net: some models (esp. code-completion-leaning ones) return an
+    # AIMessage with empty content after a tool call. If we have a SQL result
+    # or a chart, the user still needs *some* text to look at -- otherwise
+    # the frontend just shows "(empty response)".
+    if not final_text.strip():
+        if isinstance(query_result, dict) and query_result.get("error"):
+            final_text = f"查询出错：{query_result['error']}"
+        elif sql_query:
+            final_text = "查询已执行,见上方 SQL 与图表。"
+        else:
+            final_text = "(模型未返回文字说明)"
+
     # 4. Stream SQL result rows when the spec says we should. A non-streamed
     # small result rides entirely in the final `end` event.
     rows_sent = 0

@@ -24,8 +24,9 @@ SYSTEM_PROMPT = """你是一个专业的数据分析助手。用户会先上传 
 注意事项：
 - 只能生成 SELECT / WITH 开头的查询，禁止任何写操作（INSERT/UPDATE/DELETE/DROP 等）。
 - 列名含空格或特殊字符时用双引号包裹，例如 "Order ID"。
-- create_chart 工具的 chart_type 必须是 'bar'、'line'、'pie' 之一。
-- 不要重复解释自己的工具调用过程，除非对用户有帮助。"""
+- create_chart 工具的 chart_type 必须是 'bar'、'line'、'pie'、'scatter' 之一。
+- 不要重复解释自己的工具调用过程，除非对用户有帮助。
+- 每次回答必须在 content 中输出文字 —— 即使没有数据需要分析,也要用一句话告诉用户结论或提示(例如 "请先上传数据文件"、"未匹配到记录" 等)。调用工具后必须接着输出一段文字总结。"""
 
 
 def _build_llm(temperature: float = 0):

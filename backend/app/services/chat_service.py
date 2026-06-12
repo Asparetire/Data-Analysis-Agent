@@ -117,6 +117,17 @@ async def run_chat(
     sql_query = result.get("sql_query")
     query_result = result.get("analysis_result")
 
+    # Safety net: if the model left the AIMessage content empty (common with
+    # code-completion-leaning models after a tool call), fall back to a
+    # human-readable note so the UI never shows a blank message.
+    if not final_text.strip():
+        if isinstance(query_result, dict) and query_result.get("error"):
+            final_text = f"查询出错：{query_result['error']}"
+        elif sql_query:
+            final_text = "查询已执行,见上方 SQL 与图表。"
+        else:
+            final_text = "(模型未返回文字说明)"
+
     # Persist the new turn. We append the user message verbatim, then the
     # assistant message along with the chart/sql snapshot so the next reload
     # can rehydrate everything.
