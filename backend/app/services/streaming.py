@@ -6,7 +6,6 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ..agents.graph import build_graph, initial_state
 from ..services import session_service
 from ..services.chat_service import (
     SessionBindingError,
@@ -164,6 +163,10 @@ async def stream_chat(
     )
 
     # 2. Build the graph (this can throw if the data source was deleted).
+    # Local import: app.agents.graph transitively imports app.services
+    # modules, so a top-level import would cycle.
+    from ..agents.graph import build_graph, initial_state
+
     try:
         graph = build_graph(
             data_source_id=active_data_source_id,

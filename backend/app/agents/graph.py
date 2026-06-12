@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from collections.abc import Sequence
 from typing import Any
 
+import pandas as pd
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
@@ -36,52 +36,6 @@ def _build_llm(temperature: float = 0):
     )
 
 
-def _build_echarts_option(args: dict) -> dict | None:
-    """Turn the structured args from a create_chart call into an ECharts option."""
-    chart_type = (args.get("chart_type") or "").lower()
-    title = args.get("title") or ""
-    x_data = args.get("x_data") or []
-    series = args.get("series") or []
-
-    if chart_type not in {"bar", "line", "pie"}:
-        chart_type = "bar"
-    if not series:
-        return None
-
-    if chart_type == "pie":
-        first = series[0] or {}
-        values = first.get("data") or []
-        pie_data = [{"name": str(n), "value": v} for n, v in zip(x_data, values, strict=False)]
-        echarts_series = [{"name": first.get("name") or title, "type": "pie", "data": pie_data}]
-    else:
-        echarts_series = [
-            {
-                "name": s.get("name") or f"Series {i + 1}",
-                "type": chart_type,
-                "data": s.get("data") or [],
-            }
-            for i, s in enumerate(series)
-        ]
-
-    option: dict[str, Any] = {
-        "title": {"text": title, "left": "center"},
-        "tooltip": {"trigger": "axis" if chart_type != "pie" else "item"},
-        "legend": {"bottom": 0},
-        "grid": {"left": 40, "right": 20, "top": 50, "bottom": 50, "containLabel": True},
-        "xAxis": {
-            "type": "category",
-            "data": x_data,
-            "name": "",
-        },
-        "yAxis": {"type": "value"},
-        "series": echarts_series,
-    }
-    return option
-
-
-_JSON_BLOCK = re.compile(r"```(?:json)?\s*(\{.*?\}|\[.*?\])\s*```", re.DOTALL)
-
-
 def _find_create_chart_args(messages) -> dict | None:
     for msg in reversed(messages):
         tool_calls = getattr(msg, "tool_calls", None)
@@ -107,28 +61,6 @@ def _find_sql_query(messages) -> str | None:
     return None
 
 
-def _extract_chart_from_message(messages) -> dict | None:
-    for msg in reversed(messages):
-        if not isinstance(msg, AIMessage):
-            continue
-        content = msg.content
-        if not isinstance(content, str):
-            continue
-        match = _JSON_BLOCK.search(content)
-        if not match:
-            continue
-        try:
-            parsed = json.loads(match.group(1))
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            if "series" in parsed and isinstance(parsed["series"], list):
-                return parsed
-            if "chart_type" in parsed and "series" in parsed:
-                return _build_echarts_option(parsed)
-    return None
-
-
 def _last_query_result(messages) -> dict | None:
     """Return the most recent query_database tool result as a dict, or None."""
     for msg in reversed(messages):
@@ -146,20 +78,58 @@ def _last_query_result(messages) -> dict | None:
     return None
 
 
+def _last_user_query(messages) -> str:
+    for msg in reversed(messages):
+        if isinstance(msg, HumanMessage):
+            return msg.content or ""
+    return ""
+
+
 def post_process(state: AgentState) -> dict:
-    """Final pass: lift chart, SQL, and the last query result into state fields."""
-    chart_data = None
-    args = _find_create_chart_args(state["messages"])
-    if args:
-        chart_data = _build_echarts_option(args)
-    if chart_data is None:
-        chart_data = _extract_chart_from_message(state["messages"])
+    """Run the visualization pipeline against the last query result.
+
+    Pipeline:
+      1. Pull the last query_database tool result and the LLM's create_chart args.
+      2. Convert the result rows to a DataFrame.
+      3. build_chart_spec(...) — auto-recommend or follow the LLM suggestion,
+         then apply any user overrides (改类型 / 字段用颜色 / 添加标题).
+      4. echarts_from_spec(spec) — translate to the ECharts option dict the
+         frontend renders. None for TABLE (the frontend renders its own table).
+
+    We always return the spec dump alongside the ECharts option so the front-
+    end / future tooling can inspect the original intent.
+    """
+    # Local import: app.services.visualization transitively imports this
+    # module via chat_service / streaming, so a top-level import would cycle.
+    from ..services.visualization import build_chart_spec, echarts_from_spec
+
+    messages = state["messages"]
+    args = _find_create_chart_args(messages)
+    sql_query = _find_sql_query(messages)
+    analysis_result = _last_query_result(messages)
+
+    chart_data: dict[str, Any] | None = None
+    chart_spec_dump: dict[str, Any] | None = None
+
+    if isinstance(analysis_result, dict):
+        rows = analysis_result.get("rows") or []
+        if rows:
+            # query_database already returns rows as a list of dicts with
+            # column-name keys, so pd.DataFrame(rows) works directly.
+            df = pd.DataFrame(rows)
+            spec = build_chart_spec(
+                df=df,
+                llm_suggestion=args,
+                user_query=_last_user_query(messages),
+            )
+            chart_data = echarts_from_spec(spec)
+            chart_spec_dump = spec.model_dump()
 
     return {
         "chart_data": chart_data,
-        "chart_args": args,
-        "sql_query": _find_sql_query(state["messages"]),
-        "analysis_result": _last_query_result(state["messages"]),
+        "chart_spec": chart_spec_dump,
+        "sql_query": sql_query,
+        "analysis_result": analysis_result,
     }
 
 
@@ -225,6 +195,6 @@ def initial_state(session_id: str, message: str, data_source_id: str | None) -> 
         "sql_query": None,
         "analysis_result": None,
         "chart_data": None,
-        "chart_args": None,
+        "chart_spec": None,
         "error": None,
     }

@@ -19,5 +19,5 @@ class AgentState(TypedDict):
     sql_query: str | None
     analysis_result: Any | None
     chart_data: dict | None
-    chart_args: dict | None
+    chart_spec: dict | None
     error: str | None

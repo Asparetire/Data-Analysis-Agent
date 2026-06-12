@@ -4,7 +4,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage
 
-from ..agents.graph import build_graph, initial_state
 from ..models.schemas import ChatResponse
 from ..utils.logger import get_logger
 from . import session_service
@@ -87,6 +86,10 @@ async def run_chat(
     active_session_id = session["session_id"]
     active_data_source_id = session.get("data_source_id")
     history = session.get("chat_history") or []
+
+    # Local import: app.agents.graph transitively imports app.services
+    # modules, so a top-level import would cycle.
+    from ..agents.graph import build_graph, initial_state
 
     graph = build_graph(
         data_source_id=active_data_source_id,
