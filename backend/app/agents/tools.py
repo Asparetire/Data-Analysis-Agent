@@ -7,7 +7,7 @@ from langchain_core.tools import tool
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
-from ..services.data_service import UPLOAD_TABLE
+from ..services import data_service
 from ..utils.database import get_engine
 from ..utils.logger import get_logger
 
@@ -71,18 +71,13 @@ def build_tools(data_source_id: str | None) -> list:
 
     @tool
     def get_table_schema() -> str:
-        """Return the schema of the current uploaded_data table (columns, types, row count)."""
-        try:
-            with engine.connect() as conn:
-                rows = conn.execute(text(f'PRAGMA table_info("{UPLOAD_TABLE}")')).fetchall()
-                schema = [{"name": row[1], "type": row[2], "nullable": not row[3]} for row in rows]
-                count = conn.execute(text(f'SELECT COUNT(*) FROM "{UPLOAD_TABLE}"')).scalar()
+        """Return the schema of the current primary table (columns, types, row count)."""
+        info = data_service.get_table_info(data_source_id)
+        if info is None:
             return json.dumps(
-                {"table": UPLOAD_TABLE, "row_count": count, "columns": schema},
-                ensure_ascii=False,
+                {"error": "No data source loaded or table not found."}, ensure_ascii=False
             )
-        except SQLAlchemyError as e:
-            return json.dumps({"error": f"SQL error: {e}"}, ensure_ascii=False)
+        return json.dumps(info, ensure_ascii=False)
 
     @tool
     def create_chart(
