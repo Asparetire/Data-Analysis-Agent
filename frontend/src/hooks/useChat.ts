@@ -60,10 +60,12 @@ export function useChat() {
       const userTs = new Date().toISOString();
       appendMessage({ role: 'user', content: trimmed, timestamp: userTs });
       // Placeholder assistant message that we'll patch in place as events arrive.
+      // The content stays empty until the first LLM token arrives so the user
+      // doesn't see a stale "思考中…" right above the streaming text.
       const assistantTs = new Date().toISOString();
       appendMessage({
         role: 'assistant',
-        content: '思考中…',
+        content: '',
         timestamp: assistantTs,
       });
       setLoading(true);
@@ -77,7 +79,22 @@ export function useChat() {
           handleStreamEvent(evt, activeSessionId, setSessionId);
         }
         if (controller.signal.aborted) {
-          patchLastAssistant({ content: '(已停止生成)' });
+          // Preserve whatever text streamed in before stop; just append a marker.
+          useChatStore.setState((s) => {
+            for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+              if (s.messages[i].role === 'assistant') {
+                const messages = [...s.messages];
+                messages[i] = {
+                  ...messages[i],
+                  content: messages[i].content
+                    ? `${messages[i].content}\n(已停止生成)`
+                    : '(已停止生成)',
+                };
+                return { messages };
+              }
+            }
+            return s;
+          });
         }
       } catch (err) {
         patchLastAssistant({ content: `Request failed: ${describeStreamError(err)}` });
@@ -95,7 +112,31 @@ export function useChat() {
     setLoading(false);
   }, [setLoading]);
 
-  return { messages, isLoading, sessionId, sendMessage, clearChat, abort };
+  const regenerate = useCallback(
+    async (dataSourceId?: string) => {
+      if (isLoading) return;
+      // Find the last user turn and resend it. If the last assistant turn was
+      // a placeholder/error we drop it first so the UI shows a single new
+      // assistant bubble instead of stacking on top of the failed one.
+      const list = useChatStore.getState().messages;
+      let lastUserIdx = -1;
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        if (list[i].role === 'user') {
+          lastUserIdx = i;
+          break;
+        }
+      }
+      if (lastUserIdx === -1) return;
+      const lastUser = list[lastUserIdx];
+      // Drop the trailing assistant reply (and the user message we're about
+      // to re-add) so we don't duplicate them.
+      useChatStore.setState({ messages: list.slice(0, lastUserIdx) });
+      await sendMessage(lastUser.content, dataSourceId);
+    },
+    [isLoading, sendMessage],
+  );
+
+  return { messages, isLoading, sessionId, sendMessage, clearChat, abort, regenerate };
 }
 
 function handleStreamEvent(
@@ -104,17 +145,67 @@ function handleStreamEvent(
   setSessionId: (id: string) => void,
 ) {
   if (evt.event === 'chunk') {
-    const payload = evt.data as { type: string; message?: string; content?: unknown[] };
+    const payload = evt.data as {
+      type: string;
+      message?: string;
+      text?: string;
+      content?: unknown[];
+    };
     if (payload.type === 'progress') {
-      patchLastAssistant({ content: payload.message || '处理中…' });
+      // Don't clobber already-streamed text with a transient progress blurb.
+      // Only set the blurb when the bubble is still empty (LLM hasn't started).
+      useChatStore.setState((s) => {
+        for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+          if (s.messages[i].role === 'assistant') {
+            if (s.messages[i].content) return s; // already streaming
+            const messages = [...s.messages];
+            messages[i] = { ...messages[i], content: payload.message || '处理中…' };
+            return { messages };
+          }
+        }
+        return s;
+      });
+    } else if (payload.type === 'token') {
+      // Append to the live assistant bubble. This is the per-token path the
+      // user sees word-by-word. We read-modify-write through the store to
+      // avoid losing other fields (sql/chart) that the end event will set.
+      const text = payload.text || '';
+      if (!text) return;
+      useChatStore.setState((s) => {
+        for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+          if (s.messages[i].role === 'assistant') {
+            const messages = [...s.messages];
+            messages[i] = {
+              ...messages[i],
+              content: (messages[i].content || '') + text,
+            };
+            return { messages };
+          }
+        }
+        return s;
+      });
     } else if (payload.type === 'data') {
       // Row data chunks are surfaced as a small summary in the assistant text;
-      // the data itself rides in `data_chunks` for the table renderer.
+      // the data itself rides in `data_chunks` for the table renderer. We only
+      // set the summary when streaming text is *not* in progress, so we don't
+      // clobber an LLM that just produced a sentence.
       const content = (payload.content as unknown[]) || [];
       const data_chunks = content as Record<string, unknown>[];
-      patchLastAssistant({
-        content: `已接收 ${data_chunks.length} 行数据`,
-        data_chunks,
+      useChatStore.setState((s) => {
+        for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+          if (s.messages[i].role === 'assistant') {
+            // Append to streamed text rather than replacing it.
+            const summary = `已接收 ${data_chunks.length} 行数据`;
+            const messages = [...s.messages];
+            messages[i] = {
+              ...messages[i],
+              content: messages[i].content ? `${messages[i].content}\n${summary}` : summary,
+              data_chunks,
+            };
+            return { messages };
+          }
+        }
+        return s;
       });
     }
     return;
@@ -130,10 +221,25 @@ function handleStreamEvent(
     if (payload.session_id && payload.session_id !== currentSessionId) {
       setSessionId(payload.session_id);
     }
-    patchLastAssistant({
-      content: payload.message || '(empty response)',
-      chartData: payload.chart_config ?? undefined,
-      sqlQuery: payload.sql_query ?? undefined,
+    // The streamed tokens already populated `content`. Only overwrite when
+    // the server explicitly sent a final message that differs (the safety
+    // net for empty-content models). When they match, leave it alone so we
+    // don't lose typing-state artifacts.
+    useChatStore.setState((s) => {
+      for (let i = s.messages.length - 1; i >= 0; i -= 1) {
+        if (s.messages[i].role === 'assistant') {
+          const incoming = payload.message || '(empty response)';
+          const messages = [...s.messages];
+          messages[i] = {
+            ...messages[i],
+            content: messages[i].content || incoming,
+            chartData: payload.chart_config ?? messages[i].chartData,
+            sqlQuery: payload.sql_query ?? messages[i].sqlQuery,
+          };
+          return { messages };
+        }
+      }
+      return s;
     });
     return;
   }
