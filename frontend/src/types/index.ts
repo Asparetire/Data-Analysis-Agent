@@ -33,6 +33,7 @@ export interface ChatResponse {
 export interface DataSource {
   id: string;
   name: string;
+  filename: string;
   type: 'csv' | 'excel' | 'json' | 'database';
   created_at: string;
 }

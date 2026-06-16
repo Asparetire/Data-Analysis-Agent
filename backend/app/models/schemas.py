@@ -39,9 +39,16 @@ class UploadResponse(BaseModel):
 
 class DataSource(BaseModel):
     id: str
-    name: str
+    name: str  # effective name (custom display name, or filename if unset)
+    filename: str  # original on-disk filename, immutable
     type: str  # "csv" | "excel" | "json" | "database"
     created_at: datetime
+
+
+class DataSourceRename(BaseModel):
+    """PATCH body for renaming a data source's display name."""
+
+    display_name: str = Field(min_length=1, max_length=200)
 
 
 class SessionCreateResponse(BaseModel):
