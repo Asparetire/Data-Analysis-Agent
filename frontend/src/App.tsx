@@ -1,18 +1,14 @@
-import { useEffect, useMemo, type ReactNode } from 'react';
-import { Database, Home as HomeIcon, BarChart3, Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Database, Home as HomeIcon, BarChart3, Loader2, Moon, Sun, Menu, X } from 'lucide-react';
 import { useChatStore, type PageKey } from './store/chatStore';
 import { useChat } from './hooks/useChat';
 import { useUpload } from './hooks/useUpload';
+import { toggleLocale, toggleTheme, useT, useTheme } from './hooks/useUi';
 import Sidebar from './components/Sidebar';
 import FileUpload from './components/Upload';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import './App.css';
-
-const NAV_ITEMS: { key: PageKey; label: string; icon: ReactNode }[] = [
-  { key: 'home', label: '对话', icon: <HomeIcon size={14} /> },
-  { key: 'analysis', label: '分析', icon: <BarChart3 size={14} /> },
-];
 
 export default function App() {
   const page = useChatStore((s) => s.page);
@@ -24,6 +20,17 @@ export default function App() {
   const restoreSession = useChatStore((s) => s.restoreSession);
   const { sendMessage } = useChat();
   const { status, reset } = useUpload();
+  const t = useT();
+  const [theme] = useTheme();
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const navItems: { key: PageKey; label: string; icon: ReactNode }[] = useMemo(
+    () => [
+      { key: 'home', label: t('nav.home'), icon: <HomeIcon size={14} /> },
+      { key: 'analysis', label: t('nav.analysis'), icon: <BarChart3 size={14} /> },
+    ],
+    [t],
+  );
 
   // Bootstrap the session on mount: try to rehydrate the persisted id, or
   // create a new one. This way the very first chat doesn't have to wait for
@@ -69,25 +76,57 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <h1>
-          <Database size={20} /> 数据分析 Agent
+          <Database size={20} /> {t('app.title')}
         </h1>
-        <nav className="nav">
-          {NAV_ITEMS.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className={page === item.key ? 'active' : ''}
-              onClick={() => setPage(item.key)}
-            >
-              {item.icon}
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        <div className="app-header-tools">
+          <nav className="nav">
+            {navItems.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className={page === item.key ? 'active' : ''}
+                onClick={() => setPage(item.key)}
+              >
+                {item.icon}
+                {item.label}
+              </button>
+            ))}
+          </nav>
+          <button
+            type="button"
+            className="icon-btn lang"
+            onClick={toggleLocale}
+            title={t('lang.toggle')}
+            aria-label={t('lang.toggle')}
+          >
+            {t('lang.toggle')}
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={toggleTheme}
+            title={t('theme.toggle')}
+            aria-label={t('theme.toggle')}
+          >
+            {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            type="button"
+            className="icon-btn sidebar-toggle"
+            onClick={() => setDrawerOpen((v) => !v)}
+            title={drawerOpen ? t('common.cancel') : t('sidebar.sources')}
+            aria-label={drawerOpen ? t('common.cancel') : t('sidebar.sources')}
+          >
+            {drawerOpen ? <X size={16} /> : <Menu size={16} />}
+          </button>
+        </div>
       </header>
 
       <main className="app-main">
-        <Sidebar />
+        {drawerOpen ? (
+          <div className="sidebar-backdrop" onClick={() => setDrawerOpen(false)} />
+        ) : null}
+        <Sidebar drawerOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
         <section className="chat-section">
           {page === 'home' && !activeId && (status === 'idle' || status === 'error') ? (
@@ -126,7 +165,7 @@ export default function App() {
                 zIndex: 50,
               }}
             >
-              <Loader2 className="spin" size={14} /> 上传中…
+              <Loader2 className="spin" size={14} /> {t('upload.uploading')}
               <button
                 type="button"
                 onClick={reset}
@@ -138,7 +177,7 @@ export default function App() {
                   marginLeft: 4,
                 }}
               >
-                取消
+                {t('common.cancel')}
               </button>
             </div>
           ) : null}

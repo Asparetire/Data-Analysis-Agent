@@ -86,8 +86,8 @@
 .upload-error {
   font-size: 12px;
   color: var(--color-danger);
-  background: #fef2f2;
-  border: 1px solid #fecaca;
+  background: var(--color-danger-soft);
+  border: 1px solid var(--color-danger-border);
   padding: 6px 10px;
   border-radius: var(--radius-md);
 }
