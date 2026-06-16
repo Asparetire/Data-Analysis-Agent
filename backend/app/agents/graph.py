@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from typing import Any
 
 import pandas as pd
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
@@ -43,6 +49,16 @@ def _build_llm(temperature: float = 0):
     if settings.OPENAI_BASE_URL:
         kwargs["base_url"] = settings.OPENAI_BASE_URL
     return ChatOpenAI(**kwargs)
+
+
+TokenCallback = Callable[[str], None]
+"""Callback receiving each incremental text chunk from the *final* AI message.
+
+Intermediate "thinking" tokens (before a tool call) are NOT routed here --
+we only surface the answer the user actually sees. The callback is sync
+because langchain's astream_chunks delivers chunks synchronously to the
+consumer after the await resumes. Sink functions should be cheap.
+"""
 
 
 def _find_create_chart_args(messages) -> dict | None:
@@ -158,22 +174,57 @@ def history_to_messages(history: Sequence[dict]) -> list[BaseMessage]:
 def build_graph(
     data_source_id: str | None = None,
     chat_history: Sequence[dict] | None = None,
+    token_cb: TokenCallback | None = None,
 ):
     """Build a LangGraph compiled graph for a given data source.
 
     `chat_history` is prepended to the running messages so the LLM sees the
     full conversation. The current turn's HumanMessage is supplied separately
     via `initial_state`.
+
+    `token_cb` is an optional sink that receives incremental text chunks from
+    the *final* AI message (the one that is NOT followed by a tool call).
+    Intermediate reasoning tokens -- those streamed before the model decides
+    to call a tool -- are swallowed because users would find them noisy and
+    they're frequently reformulated anyway.
     """
     tools = build_tools(data_source_id)
     llm = _build_llm().bind_tools(tools)
     tool_node = ToolNode(tools)
     prior_messages = history_to_messages(chat_history or [])
 
-    def call_model(state: AgentState):
+    async def call_model(state: AgentState):
         messages = [SystemMessage(content=SYSTEM_PROMPT), *prior_messages, *state["messages"]]
-        response = llm.invoke(messages)
-        return {"messages": [response]}
+        # The model may be invoked multiple times (model -> tools -> model).
+        # Only the *last* invocation -- the one whose response has no tool
+        # calls -- should fan tokens out to the consumer. We detect that by
+        # looking at the next node: `should_continue` decides between
+        # `tools` and `post_process` based on the AI message's tool_calls.
+        # We replicate the same check here so the consumer can suppress
+        # intermediate streaming safely.
+        full: AIMessage | None = None
+        async for chunk in llm.astream(messages):
+            if not isinstance(chunk, AIMessageChunk):
+                continue
+            # Accumulate by summing chunks; langchain's merge semantics for
+            # AIMessageChunk add tool_calls and content piecewise.
+            full = chunk if full is None else full + chunk  # type: ignore[operator]
+        assert full is not None
+        # If this response will trigger another tool call, the user shouldn't
+        # see the half-baked thinking -- keep it for the agent but don't emit.
+        if not (getattr(full, "tool_calls", None) and full.tool_calls):
+            content = full.content
+            text = (
+                content
+                if isinstance(content, str)
+                else "".join(
+                    block.get("text", "") if isinstance(block, dict) else str(block)
+                    for block in (content or [])
+                )
+            )
+            if text and token_cb is not None:
+                token_cb(text)
+        return {"messages": [full]}
 
     def should_continue(state: AgentState):
         last = state["messages"][-1]

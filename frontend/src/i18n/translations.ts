@@ -1,0 +1,194 @@
+// Tiny hand-rolled i18n.
+//
+// Why no library: a full i18n library (i18next, react-intl) would add
+// ~30kB of gzipped weight for a two-language app. Our surface is a
+// handful of UI strings, so a flat dictionary + a useLocale hook is
+// enough. When the dictionary grows past ~50 keys or we need plurals,
+// swap in i18next.
+
+export type Locale = 'zh' | 'en';
+
+export const SUPPORTED_LOCALES: Locale[] = ['zh', 'en'];
+export const DEFAULT_LOCALE: Locale = 'zh';
+
+const STRINGS = {
+  zh: {
+    'app.title': '数据分析 Agent',
+    'nav.home': '对话',
+    'nav.analysis': '分析',
+    'sidebar.sources': '数据源',
+    'sidebar.active': '当前使用中',
+    'sidebar.none': '未选择数据源',
+    'sidebar.uploadFirst': '请先上传文件',
+    'sidebar.historyEmpty': '暂无历史数据源',
+    'sidebar.switchTitle': '切换数据源',
+    'sidebar.switchBody':
+      '当前会话已绑定到「{current}」,切换到「{target}」会改变后续提问的查询范围。是否继续?',
+    'sidebar.confirmSwitch': '确认切换',
+    'sidebar.cancel': '取消',
+    'sidebar.delete': '删除',
+    'sidebar.deleteConfirm': '确定删除数据源「{name}」?此操作不可恢复,关联的会话也会被清理。',
+    'sidebar.rename': '重命名',
+    'sidebar.save': '保存',
+    'chat.title': '智能分析对话',
+    'chat.currentDataSource': '当前数据源:{name}',
+    'chat.noDataSource': '尚未选择数据源',
+    'chat.input.placeholderWithSource':
+      '输入你的数据分析问题,Enter 发送,Shift+Enter 换行 (Ctrl+K 聚焦)',
+    'chat.input.placeholderNoSource': '请先在左侧上传或选择数据源',
+    'chat.send': '发送',
+    'chat.stop': '停止',
+    'chat.clear': '清空对话',
+    'chat.regenerate': '重新生成',
+    'chat.regenerateTitle': '重新生成上一条回答',
+    'chat.empty.title': '开始你的分析',
+    'chat.empty.body': '上传 CSV / Excel 文件后,可以直接用自然语言提问,例如:',
+    'chat.empty.hint1': '· 销售额最高的 5 个产品是什么?',
+    'chat.empty.hint2': '· 统计每个地区的订单数量',
+    'chat.empty.hint3': '· 画一个按月份的趋势图',
+    'chat.empty.shortcuts': '快捷键: Ctrl+K 聚焦输入 · Ctrl+Enter 发送',
+    'chat.csvExport': 'CSV',
+    'chat.pngExport': 'PNG',
+    'chat.dataRows': '行数据 ({n} 行)',
+    'chat.sqlLabel': '执行的 SQL',
+    'chat.viewChartData': '查看 chart_data',
+    'chat.stopped': '(已停止生成)',
+    'chat.emptyReply': '(empty response)',
+    'chat.errorPrefix': 'Error:',
+    'chat.requestFailed': 'Request failed:',
+    'upload.clickOrDrop': '点击或拖拽文件到此处',
+    'upload.supported': '支持 CSV / Excel / JSON (≤50MB)',
+    'upload.uploading': '上传中…',
+    'upload.reupload': '重新上传',
+    'upload.sqliteNote': '文件会被解析到独立 SQLite 数据库',
+    'upload.uploadedToast': '已成功加载「{name}」,下方是数据预览与建议提问。',
+    'upload.goToAnalysis': '打开分析页',
+    'home.suggestion.bar': '统计每个分类的数量并画柱状图',
+    'home.suggestion.trend': '按时间字段做一个趋势折线图',
+    'home.suggestion.top5': '占比前 5 的项目画成饼图',
+    'home.suggestion.overview': '给我一个简要的数据概览(行数、列、缺失值)',
+    'analysis.title': '请选择数据源',
+    'analysis.emptyTitle': '还没有数据源',
+    'analysis.emptyBody': '请到 Home 页面先上传一个 CSV/Excel 文件,然后回到这里查看详细分析。',
+    'analysis.cols': '{n} 列',
+    'analysis.previewRows': '预览 {n} 行',
+    'analysis.schema': '字段概览',
+    'analysis.preview': '数据预览(前 {n} 行)',
+    'analysis.missing': '缺失 {pct}%',
+    'analysis.complete': '完整',
+    'analysis.loading': '加载中…',
+    'analysis.error': '加载数据失败:{err}',
+    'common.cancel': '取消',
+    'common.confirm': '确认',
+    'common.preview': '正在加载数据预览…',
+    'common.previewFailed': '加载预览失败:{err}',
+    'common.emptyData': '数据为空',
+    'common.uploadPrompt': '上传你的数据',
+    'common.uploadPromptBody':
+      '支持 CSV / Excel / JSON 文件,文件会被解析到独立的 SQLite 数据库,你可以用自然语言提出问题。',
+    'theme.toggle': '切换主题',
+    'lang.toggle': 'English',
+    'pagination.range': '第 {from}–{to} 行 / 共 {total} 行',
+    'pagination.prev': '上一页',
+    'pagination.next': '下一页',
+  },
+  en: {
+    'app.title': 'Data Analysis Agent',
+    'nav.home': 'Chat',
+    'nav.analysis': 'Analysis',
+    'sidebar.sources': 'Data sources',
+    'sidebar.active': 'In use',
+    'sidebar.none': 'No data source',
+    'sidebar.uploadFirst': 'Upload a file to get started',
+    'sidebar.historyEmpty': 'No data sources yet',
+    'sidebar.switchTitle': 'Switch data source',
+    'sidebar.switchBody':
+      'This session is bound to "{current}". Switching to "{target}" will change the scope of future queries. Continue?',
+    'sidebar.confirmSwitch': 'Switch',
+    'sidebar.cancel': 'Cancel',
+    'sidebar.delete': 'Delete',
+    'sidebar.deleteConfirm':
+      'Delete "{name}"? This cannot be undone, and bound sessions will be cleaned up.',
+    'sidebar.rename': 'Rename',
+    'sidebar.save': 'Save',
+    'chat.title': 'Analysis chat',
+    'chat.currentDataSource': 'Current data source: {name}',
+    'chat.noDataSource': 'No data source selected',
+    'chat.input.placeholderWithSource':
+      'Ask a data question. Enter sends, Shift+Enter newline (Ctrl+K to focus).',
+    'chat.input.placeholderNoSource': 'Upload or pick a data source on the left first',
+    'chat.send': 'Send',
+    'chat.stop': 'Stop',
+    'chat.clear': 'Clear chat',
+    'chat.regenerate': 'Regenerate',
+    'chat.regenerateTitle': 'Regenerate the last answer',
+    'chat.empty.title': 'Start analyzing',
+    'chat.empty.body': 'Upload a CSV/Excel file and ask in natural language, e.g.:',
+    'chat.empty.hint1': '· What are the top 5 products by revenue?',
+    'chat.empty.hint2': '· Count orders per region',
+    'chat.empty.hint3': '· Plot a monthly trend chart',
+    'chat.empty.shortcuts': 'Shortcuts: Ctrl+K to focus · Ctrl+Enter to send',
+    'chat.csvExport': 'CSV',
+    'chat.pngExport': 'PNG',
+    'chat.dataRows': 'Rows ({n})',
+    'chat.sqlLabel': 'SQL',
+    'chat.viewChartData': 'View chart_data',
+    'chat.stopped': '(stopped)',
+    'chat.emptyReply': '(empty response)',
+    'chat.errorPrefix': 'Error:',
+    'chat.requestFailed': 'Request failed:',
+    'upload.clickOrDrop': 'Click or drop a file here',
+    'upload.supported': 'CSV / Excel / JSON (≤50MB)',
+    'upload.uploading': 'Uploading…',
+    'upload.reupload': 'Upload again',
+    'upload.sqliteNote': 'Files are loaded into per-source SQLite databases',
+    'upload.uploadedToast': '"{name}" loaded. See preview and prompts below.',
+    'upload.goToAnalysis': 'Open analysis',
+    'home.suggestion.bar': 'Count rows per category and plot a bar chart',
+    'home.suggestion.trend': 'Plot a trend line over the time field',
+    'home.suggestion.top5': 'Top 5 by share, as a pie chart',
+    'home.suggestion.overview': 'Quick data overview (rows, columns, missing values)',
+    'analysis.title': 'Pick a data source',
+    'analysis.emptyTitle': 'No data source',
+    'analysis.emptyBody':
+      'Upload a CSV/Excel file on the Home page first, then come back for details.',
+    'analysis.cols': '{n} columns',
+    'analysis.previewRows': 'Preview {n} rows',
+    'analysis.schema': 'Schema',
+    'analysis.preview': 'Preview (first {n} rows)',
+    'analysis.missing': '{pct}% missing',
+    'analysis.complete': 'OK',
+    'analysis.loading': 'Loading…',
+    'analysis.error': 'Failed to load data: {err}',
+    'common.cancel': 'Cancel',
+    'common.confirm': 'Confirm',
+    'common.preview': 'Loading data preview…',
+    'common.previewFailed': 'Preview failed: {err}',
+    'common.emptyData': 'Empty data',
+    'common.uploadPrompt': 'Upload your data',
+    'common.uploadPromptBody':
+      'CSV / Excel / JSON files. Each one is loaded into its own SQLite database, queryable in natural language.',
+    'theme.toggle': 'Toggle theme',
+    'lang.toggle': '中文',
+    'pagination.range': '{from}–{to} of {total} rows',
+    'pagination.prev': 'Previous',
+    'pagination.next': 'Next',
+  },
+} as const;
+
+export type StringKey = keyof typeof STRINGS.zh;
+
+function interpolate(template: string, params?: Record<string, string | number>): string {
+  if (!params) return template;
+  return template.replace(/\{(\w+)\}/g, (_, k) => String(params[k] ?? `{${k}}`));
+}
+
+export function t(
+  locale: Locale,
+  key: StringKey,
+  params?: Record<string, string | number>,
+): string {
+  const dict = STRINGS[locale] as Record<string, string>;
+  const raw = dict[key] ?? STRINGS.zh[key] ?? key;
+  return interpolate(raw, params);
+}

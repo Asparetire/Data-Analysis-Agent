@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import axios from 'axios';
-import { BarChart3, LineChart, PieChart, Sparkles, Table } from 'lucide-react';
+import { BarChart3, LineChart, PieChart, Sparkles, Table, CheckCircle2 } from 'lucide-react';
 import ChatWindow from '../components/Chat/ChatWindow';
 import FileUpload from '../components/Upload';
 import { useChatStore } from '../store/chatStore';
 import { previewDataSource, schemaDataSource } from '../services/api';
+import { useT } from '../hooks/useUi';
 
 interface PreviewState {
   loading: boolean;
@@ -13,18 +14,37 @@ interface PreviewState {
   error?: string;
 }
 
-const SUGGESTIONS = [
-  { icon: <BarChart3 size={14} />, text: '统计每个分类的数量并画柱状图' },
-  { icon: <LineChart size={14} />, text: '按时间字段做一个趋势折线图' },
-  { icon: <PieChart size={14} />, text: '占比前 5 的项目画成饼图' },
-  { icon: <Sparkles size={14} />, text: '给我一个简要的数据概览（行数、列、缺失值）' },
-];
-
 export default function Home() {
+  const t = useT();
   const activeId = useChatStore((s) => s.activeDataSourceId);
   const activeName = useChatStore((s) => s.activeDataSourceName);
   const setPage = useChatStore((s) => s.setPage);
+  const uploadedFileName = useChatStore((s) => s.uploadedFileName);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  const [justUploaded, setJustUploaded] = useState<string | null>(null);
+
+  const SUGGESTIONS: { icon: ReactNode; text: string }[] = [
+    { icon: <BarChart3 size={14} />, text: t('home.suggestion.bar') },
+    { icon: <LineChart size={14} />, text: t('home.suggestion.trend') },
+    { icon: <PieChart size={14} />, text: t('home.suggestion.top5') },
+    { icon: <Sparkles size={14} />, text: t('home.suggestion.overview') },
+  ];
+
+  // Fire a one-shot banner when the file name flips. The banner shows the
+  // new filename + a "go to analysis" shortcut. The user dismissing the
+  // banner (or any data-source switch) clears it.
+  useEffect(() => {
+    if (uploadedFileName) {
+      setJustUploaded(uploadedFileName);
+      const timer = setTimeout(() => setJustUploaded(null), 5000);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+  }, [uploadedFileName]);
+
+  useEffect(() => {
+    if (activeId) setJustUploaded(null);
+  }, [activeId]);
 
   useEffect(() => {
     if (!activeId) {
@@ -61,6 +81,41 @@ export default function Home() {
     >
       {activeId ? (
         <div style={{ padding: '16px 24px 0 24px' }}>
+          {justUploaded ? (
+            <div
+              role="status"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                background: 'var(--color-success)',
+                color: 'white',
+                padding: '8px 14px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: 13,
+                marginBottom: 12,
+                boxShadow: 'var(--shadow-sm)',
+              }}
+            >
+              <CheckCircle2 size={14} />
+              <span style={{ flex: 1 }}>{t('upload.uploadedToast', { name: justUploaded })}</span>
+              <button
+                type="button"
+                onClick={() => setPage('analysis')}
+                style={{
+                  background: 'rgba(255,255,255,0.18)',
+                  border: 'none',
+                  color: 'white',
+                  padding: '4px 10px',
+                  borderRadius: 6,
+                  fontSize: 12,
+                  cursor: 'pointer',
+                }}
+              >
+                {t('upload.goToAnalysis')}
+              </button>
+            </div>
+          ) : null}
           <DataPreview
             name={activeName}
             preview={preview}
@@ -74,11 +129,8 @@ export default function Home() {
         </div>
       ) : (
         <div className="empty-state" style={{ flex: 1, padding: 32 }}>
-          <h2>上传你的数据</h2>
-          <p>
-            支持 CSV / Excel / JSON 文件，文件会被解析到独立的 SQLite 数据库，
-            你可以用自然语言提出问题。
-          </p>
+          <h2>{t('common.uploadPrompt')}</h2>
+          <p>{t('common.uploadPromptBody')}</p>
           <div style={{ width: '100%', maxWidth: 480 }}>
             <FileUpload />
           </div>
@@ -125,14 +177,17 @@ function DataPreview({
   preview: PreviewState | null;
   onOpenAnalysis: () => void;
 }) {
+  const t = useT();
   if (!preview) return null;
   if (preview.loading) {
-    return <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>正在加载数据预览…</div>;
+    return (
+      <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>{t('common.preview')}</div>
+    );
   }
   if (preview.error) {
     return (
       <div style={{ color: 'var(--color-danger)', fontSize: 13 }}>
-        加载预览失败：{preview.error}
+        {t('common.previewFailed', { err: preview.error })}
       </div>
     );
   }
@@ -150,7 +205,7 @@ function DataPreview({
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
-          <Table size={14} /> {name} · 前 {preview.rows.length} 行
+          <Table size={14} /> {name} · {t('analysis.previewRows', { n: preview.rows.length })}
         </div>
         <button
           type="button"
@@ -164,11 +219,13 @@ function DataPreview({
             fontSize: 12,
           }}
         >
-          打开分析页
+          {t('upload.goToAnalysis')}
         </button>
       </div>
       {preview.rows.length === 0 ? (
-        <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>数据为空</div>
+        <div style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
+          {t('common.emptyData')}
+        </div>
       ) : (
         <div style={{ overflowX: 'auto' }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>

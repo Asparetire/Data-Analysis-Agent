@@ -96,16 +96,16 @@
 }
 
 .assistant-message.error .message-content {
-  background: #fef2f2;
+  background: var(--color-danger-soft);
   color: var(--color-danger);
-  border-color: #fecaca;
+  border-color: var(--color-danger-border);
 }
 
 .sql-block {
   margin: 10px 0 0 0;
   padding: 10px 12px;
-  background: #0f172a;
-  color: #e2e8f0;
+  background: var(--color-code-bg);
+  color: var(--color-code-fg);
   border-radius: var(--radius-md);
   overflow-x: auto;
   font-size: 12px;
@@ -138,7 +138,8 @@
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   padding: 8px;
-  height: 320px;
+  height: 340px;
+  position: relative;
 }
 
 .chart-empty {
@@ -226,11 +227,11 @@
 }
 
 .chat-input-form button:hover:not(:disabled) {
-  background: #1d4ed8;
+  background: var(--color-on-primary-soft);
 }
 
 .chat-input-form button:disabled {
-  background: #93c5fd;
+  background: var(--color-pill-active-bg);
   cursor: not-allowed;
 }
 
@@ -250,7 +251,8 @@
 }
 
 .chat-input-form button.stop-btn:hover:not(:disabled) {
-  background: #b91c1c;
+  background: var(--color-danger);
+  filter: brightness(0.9);
 }
 
 p.live {
@@ -328,4 +330,61 @@ p.live {
   text-align: center;
   color: var(--color-text-muted);
   background: var(--color-surface);
+}
+
+/* Inline action: small ghost-style button used inside details summaries
+   and the chart toolbar so the export controls don't dominate the bubble. */
+.inline-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.inline-action:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+.data-chunks summary .inline-action {
+  margin-left: auto;
+}
+
+.chart-toolbar {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+
+/* "Regenerate" lives in the message meta strip below assistant replies. */
+.meta-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  padding: 2px 8px;
+  border-radius: var(--radius-md);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.meta-action:hover {
+  background: var(--color-surface);
+  color: var(--color-text);
 }

@@ -79,11 +79,19 @@ export const deleteDataSource = async (dataSourceId: string) => {
   return response.data;
 };
 
+export const renameDataSource = async (dataSourceId: string, displayName: string) => {
+  const response = await api.patch<DataSource>(`/datasources/${dataSourceId}`, {
+    display_name: displayName,
+  });
+  return response.data;
+};
+
 export type StreamEvent =
   | {
       event: 'chunk';
       data:
         | { type: 'progress'; message: string }
+        | { type: 'token'; text: string; delta: number }
         | { type: 'data'; content: Record<string, unknown>[] };
     }
   | {

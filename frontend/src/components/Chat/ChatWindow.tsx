@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Send, Trash2, Terminal, Square, Table } from 'lucide-react';
+import { Send, Trash2, Terminal, Square, Table, RefreshCw, Download, Image } from 'lucide-react';
 import type { EChartsOption } from 'echarts';
 import { useChat } from '../../hooks/useChat';
 import { useChatStore } from '../../store/chatStore';
-import Chart from '../Chart';
-import { formatTime, safeStringify } from '../../utils';
+import Chart, { type ChartHandle } from '../Chart';
+import { downloadDataURL, downloadText, formatTime, rowsToCSV, safeStringify } from '../../utils';
+import { useT } from '../../hooks/useUi';
+import PaginatedTable from '../PaginatedTable';
 import type { ChatMessage } from '../../types';
 import './ChatWindow.css';
 
@@ -13,8 +15,9 @@ interface ChatWindowProps {
 }
 
 export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
-  const { messages, isLoading, sendMessage, clearChat, abort } = useChat();
+  const { messages, isLoading, sendMessage, clearChat, abort, regenerate } = useChat();
   const activeName = useChatStore((s) => s.activeDataSourceName);
+  const t = useT();
   const [value, setValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -44,13 +47,47 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
     }
   };
 
+  // Global shortcuts:
+  //  - Ctrl/Cmd + K  → focus the input
+  //  - Ctrl/Cmd + Enter → send the current draft from anywhere on the page
+  // We attach to window so users don't need to click the textarea first.
+  useEffect(() => {
+    const handler = (e: globalThis.KeyboardEvent) => {
+      const meta = e.ctrlKey || e.metaKey;
+      if (!meta) return;
+      const key = e.key.toLowerCase();
+      if (key === 'k') {
+        e.preventDefault();
+        textareaRef.current?.focus();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        submit();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+    // submit closes over `value` and `isLoading`; rebind so it sees fresh values.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value, isLoading, dataSourceId]);
+
+  const lastAssistantIdx = (() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (messages[i].role === 'assistant') return i;
+    }
+    return -1;
+  })();
+
   return (
     <div className="chat-window">
       <div className="chat-header">
         <div>
-          <div className="title">智能分析对话</div>
+          <div className="title">{t('chat.title')}</div>
           <div className="subtitle">
-            {dataSourceId && activeName ? `当前数据源：${activeName}` : '尚未选择数据源'}
+            {dataSourceId && activeName
+              ? t('chat.currentDataSource', { name: activeName })
+              : t('chat.noDataSource')}
           </div>
         </div>
         <button
@@ -59,19 +96,22 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
           onClick={clearChat}
           disabled={messages.length === 0 || isLoading}
         >
-          <Trash2 size={12} /> 清空对话
+          <Trash2 size={12} /> {t('chat.clear')}
         </button>
       </div>
 
       <div className="chat-messages">
         {messages.length === 0 ? (
           <div className="empty-state">
-            <h2>开始你的分析</h2>
-            <p>上传 CSV / Excel 文件后，可以直接用自然语言提问，例如：</p>
+            <h2>{t('chat.empty.title')}</h2>
+            <p>{t('chat.empty.body')}</p>
             <div className="hint">
-              <span>· 销售额最高的 5 个产品是什么？</span>
-              <span>· 统计每个地区的订单数量</span>
-              <span>· 画一个按月份的趋势图</span>
+              <span>{t('chat.empty.hint1')}</span>
+              <span>{t('chat.empty.hint2')}</span>
+              <span>{t('chat.empty.hint3')}</span>
+            </div>
+            <div className="hint" style={{ marginTop: 8 }}>
+              <span>{t('chat.empty.shortcuts')}</span>
             </div>
           </div>
         ) : (
@@ -80,6 +120,8 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
               key={`${msg.timestamp}-${i}`}
               message={msg}
               isLive={isLoading && i === messages.length - 1 && msg.role === 'assistant'}
+              canRegenerate={!isLoading && msg.role === 'assistant' && i === lastAssistantIdx}
+              onRegenerate={() => regenerate(dataSourceId)}
             />
           ))
         )}
@@ -100,18 +142,18 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
           onKeyDown={onKeyDown}
           placeholder={
             dataSourceId
-              ? '输入你的数据分析问题，Enter 发送，Shift+Enter 换行'
-              : '请先在左侧上传或选择数据源'
+              ? t('chat.input.placeholderWithSource')
+              : t('chat.input.placeholderNoSource')
           }
           rows={1}
           disabled={isLoading}
         />
         {isLoading ? (
-          <button type="button" onClick={abort} title="停止生成" className="stop-btn">
-            <Square size={14} fill="currentColor" /> 停止
+          <button type="button" onClick={abort} title={t('chat.stop')} className="stop-btn">
+            <Square size={14} fill="currentColor" /> {t('chat.stop')}
           </button>
         ) : (
-          <button type="submit" disabled={!value.trim()}>
+          <button type="submit" disabled={!value.trim()} title={t('chat.send')}>
             <Send size={18} />
           </button>
         )}
@@ -120,25 +162,48 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
   );
 }
 
-function MessageBubble({ message, isLive }: { message: ChatMessage; isLive: boolean }) {
+interface MessageBubbleProps {
+  message: ChatMessage;
+  isLive: boolean;
+  canRegenerate: boolean;
+  onRegenerate: () => void;
+}
+
+function MessageBubble({ message, isLive, canRegenerate, onRegenerate }: MessageBubbleProps) {
+  const t = useT();
   const isUser = message.role === 'user';
   const chartOption = isChartOption(message.chartData)
     ? (message.chartData as EChartsOption)
     : null;
   const hasChunks = Array.isArray(message.data_chunks) && message.data_chunks.length > 0;
+  const chartRef = useRef<ChartHandle | null>(null);
+
+  const downloadCSV = () => {
+    if (!message.data_chunks || message.data_chunks.length === 0) return;
+    const csv = rowsToCSV(message.data_chunks);
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadText(`data-${ts}.csv`, csv, 'text/csv');
+  };
+
+  const downloadPNG = () => {
+    const url = chartRef.current?.getPngDataURL();
+    if (!url) return;
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    downloadDataURL(`chart-${ts}.png`, url);
+  };
 
   return (
     <div className={`message ${isUser ? 'user-message' : 'assistant-message'}`}>
       <div className="message-content">
         <p className={isLive ? 'live' : undefined}>
-          {message.content || (isUser ? '' : '(empty reply)')}
+          {message.content || (isUser ? '' : t('chat.emptyReply'))}
           {isLive ? <span className="caret">▍</span> : null}
         </p>
 
         {message.sqlQuery ? (
           <>
             <div className="sql-label">
-              <Terminal size={11} /> 执行的 SQL
+              <Terminal size={11} /> {t('chat.sqlLabel')}
             </div>
             <pre className="sql-block">
               <code>{message.sqlQuery}</code>
@@ -149,22 +214,49 @@ function MessageBubble({ message, isLive }: { message: ChatMessage; isLive: bool
         {hasChunks ? (
           <details className="data-chunks" open>
             <summary>
-              <Table size={11} /> 行数据 ({message.data_chunks!.length} 行)
+              <Table size={11} /> {t('chat.dataRows', { n: message.data_chunks!.length })}
+              <button
+                type="button"
+                className="inline-action"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  downloadCSV();
+                }}
+                title={t('chat.csvExport')}
+              >
+                <Download size={11} /> {t('chat.csvExport')}
+              </button>
             </summary>
             <div className="data-chunks-table">
-              <DataChunksTable rows={message.data_chunks!} />
+              <PaginatedTable
+                rows={message.data_chunks!}
+                pageSize={20}
+                maxHeight={220}
+                emptyText={t('common.emptyData')}
+              />
             </div>
           </details>
         ) : null}
 
         {chartOption ? (
           <div className="chart-block">
-            <Chart option={chartOption} height="100%" />
+            <div className="chart-toolbar">
+              <button
+                type="button"
+                className="inline-action"
+                onClick={downloadPNG}
+                title={t('chat.pngExport')}
+              >
+                <Image size={11} /> {t('chat.pngExport')}
+              </button>
+            </div>
+            <Chart ref={chartRef} option={chartOption} height="100%" />
           </div>
         ) : message.chartData && !isChartOption(message.chartData) ? (
           <details style={{ marginTop: 8 }}>
             <summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--color-text-muted)' }}>
-              查看 chart_data
+              {t('chat.viewChartData')}
             </summary>
             <pre className="sql-block">{safeStringify(message.chartData)}</pre>
           </details>
@@ -173,45 +265,20 @@ function MessageBubble({ message, isLive }: { message: ChatMessage; isLive: bool
         {!isUser ? (
           <div className="message-meta">
             <span>{formatTime(message.timestamp)}</span>
+            {canRegenerate ? (
+              <button
+                type="button"
+                className="meta-action"
+                onClick={onRegenerate}
+                title={t('chat.regenerateTitle')}
+              >
+                <RefreshCw size={11} /> {t('chat.regenerate')}
+              </button>
+            ) : null}
           </div>
         ) : null}
       </div>
     </div>
-  );
-}
-
-function DataChunksTable({ rows }: { rows: Record<string, unknown>[] }) {
-  if (rows.length === 0) return null;
-  const columns = Object.keys(rows[0]);
-  const preview = rows.slice(0, 50);
-  return (
-    <table className="chunks-table">
-      <thead>
-        <tr>
-          {columns.map((c) => (
-            <th key={c}>{c}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {preview.map((row, i) => (
-          <tr key={i}>
-            {columns.map((c) => (
-              <td key={c} title={String(row[c] ?? '')}>
-                {row[c] === null || row[c] === undefined ? '—' : String(row[c])}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-      {rows.length > preview.length ? (
-        <tfoot>
-          <tr>
-            <td colSpan={columns.length}>…还有 {rows.length - preview.length} 行</td>
-          </tr>
-        </tfoot>
-      ) : null}
-    </table>
   );
 }
 

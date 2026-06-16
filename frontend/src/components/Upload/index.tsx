@@ -1,6 +1,7 @@
 import { useCallback, useRef, type ChangeEvent, type DragEvent, type KeyboardEvent } from 'react';
 import { Upload, FileText, CheckCircle, Loader2, AlertCircle, RotateCcw } from 'lucide-react';
 import { useUpload } from '../../hooks/useUpload';
+import { useT } from '../../hooks/useUi';
 import './FileUpload.css';
 
 interface FileUploadProps {
@@ -10,6 +11,7 @@ interface FileUploadProps {
 
 export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
   const { upload, reset, status, error, fileName } = useUpload();
+  const t = useT();
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   const handleFile = useCallback(
@@ -63,7 +65,7 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
         {status === 'uploading' ? (
           <div className="uploading">
             <Loader2 className="spin" size={28} />
-            <p>上传中…</p>
+            <p>{t('upload.uploading')}</p>
           </div>
         ) : status === 'success' ? (
           <div className="uploaded">
@@ -88,14 +90,14 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
                 borderRadius: 6,
               }}
             >
-              <RotateCcw size={12} /> 重新上传
+              <RotateCcw size={12} /> {t('upload.reupload')}
             </button>
           </div>
         ) : (
           <>
             <Upload size={32} color="var(--color-text-muted)" />
-            <p>点击或拖拽文件到此处</p>
-            <p className="supported-formats">支持 CSV / Excel / JSON (≤50MB)</p>
+            <p>{t('upload.clickOrDrop')}</p>
+            <p className="supported-formats">{t('upload.supported')}</p>
             <input
               ref={inputRef}
               type="file"
@@ -119,7 +121,7 @@ export default function FileUpload({ onUploadSuccess }: FileUploadProps) {
           className="supported-formats"
           style={{ display: 'flex', alignItems: 'center', gap: 4 }}
         >
-          <FileText size={12} /> 文件会被解析到独立 SQLite 数据库
+          <FileText size={12} /> {t('upload.sqliteNote')}
         </div>
       ) : null}
     </div>

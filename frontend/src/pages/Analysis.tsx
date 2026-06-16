@@ -4,6 +4,8 @@ import { Database, Layers, ListTree, AlertTriangle, Sparkles } from 'lucide-reac
 import ChatWindow from '../components/Chat/ChatWindow';
 import { useChatStore } from '../store/chatStore';
 import { previewDataSource, schemaDataSource } from '../services/api';
+import PaginatedTable from '../components/PaginatedTable';
+import { useT } from '../hooks/useUi';
 
 interface PreviewState {
   loading: boolean;
@@ -13,6 +15,7 @@ interface PreviewState {
 }
 
 export default function Analysis() {
+  const t = useT();
   const activeId = useChatStore((s) => s.activeDataSourceId);
   const activeName = useChatStore((s) => s.activeDataSourceName);
   const [preview, setPreview] = useState<PreviewState | null>(null);
@@ -57,9 +60,9 @@ export default function Analysis() {
         {!activeId ? (
           <EmptyState />
         ) : preview?.loading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>加载中…</div>
+          <div style={{ color: 'var(--color-text-muted)' }}>{t('analysis.loading')}</div>
         ) : preview?.error ? (
-          <div className="upload-error">加载数据失败：{preview.error}</div>
+          <div className="upload-error">{t('analysis.error', { err: preview.error })}</div>
         ) : (
           <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
             <SchemaPanel schema={preview?.schema ?? []} rows={preview?.rows ?? []} />
@@ -82,18 +85,19 @@ function Header({
   rowCount: number;
   schemaCount: number;
 }) {
+  const t = useT();
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
       <h1 style={{ margin: 0, fontSize: 20, display: 'flex', alignItems: 'center', gap: 8 }}>
-        <Database size={18} /> {name || '请选择数据源'}
+        <Database size={18} /> {name || t('analysis.title')}
       </h1>
       {name ? (
         <div style={{ display: 'flex', gap: 12, color: 'var(--color-text-muted)', fontSize: 12 }}>
           <span>
             <Layers size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
-            {schemaCount} 列
+            {t('analysis.cols', { n: schemaCount })}
           </span>
-          <span>预览 {rowCount} 行</span>
+          <span>{t('analysis.previewRows', { n: rowCount })}</span>
         </div>
       ) : null}
     </div>
@@ -101,11 +105,12 @@ function Header({
 }
 
 function EmptyState() {
+  const t = useT();
   return (
     <div className="empty-state">
       <AlertTriangle size={28} />
-      <h2>还没有数据源</h2>
-      <p>请到 Home 页面先上传一个 CSV/Excel 文件，然后回到这里查看详细分析。</p>
+      <h2>{t('analysis.emptyTitle')}</h2>
+      <p>{t('analysis.emptyBody')}</p>
     </div>
   );
 }
@@ -117,6 +122,7 @@ function SchemaPanel({
   schema: { name: string; type: string }[];
   rows: Record<string, unknown>[];
 }) {
+  const t = useT();
   const nullCount = (col: string) =>
     rows.reduce((n, r) => (r[col] === null || r[col] === undefined ? n + 1 : n), 0);
 
@@ -132,7 +138,7 @@ function SchemaPanel({
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8, fontWeight: 600 }}
       >
-        <ListTree size={14} /> 字段概览
+        <ListTree size={14} /> {t('analysis.schema')}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         {schema.map((col) => {
@@ -154,9 +160,11 @@ function SchemaPanel({
               <span style={{ flex: 1, fontWeight: 500 }}>{col.name}</span>
               <span style={{ color: 'var(--color-text-muted)' }}>{col.type}</span>
               {pct > 0 ? (
-                <span style={{ color: 'var(--color-danger)' }}>缺失 {pct}%</span>
+                <span style={{ color: 'var(--color-danger)' }}>
+                  {t('analysis.missing', { pct })}
+                </span>
               ) : (
-                <span style={{ color: 'var(--color-success)' }}>完整</span>
+                <span style={{ color: 'var(--color-success)' }}>{t('analysis.complete')}</span>
               )}
             </div>
           );
@@ -173,6 +181,7 @@ function DataTable({
   rows: Record<string, unknown>[];
   schema: { name: string; type: string }[];
 }) {
+  const t = useT();
   return (
     <div
       style={{
@@ -180,66 +189,21 @@ function DataTable({
         border: '1px solid var(--color-border)',
         borderRadius: 'var(--radius-md)',
         padding: 12,
-        overflow: 'hidden',
         display: 'flex',
         flexDirection: 'column',
         gap: 8,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600 }}>
-        <Sparkles size={14} /> 数据预览（前 {rows.length} 行）
+        <Sparkles size={14} /> {t('analysis.preview', { n: rows.length })}
       </div>
-      <div style={{ overflow: 'auto', maxHeight: 360 }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead>
-            <tr>
-              {schema.map((col) => (
-                <th
-                  key={col.name}
-                  style={{
-                    textAlign: 'left',
-                    padding: '6px 8px',
-                    borderBottom: '1px solid var(--color-border)',
-                    background: 'var(--color-bg)',
-                    color: 'var(--color-text-muted)',
-                    fontWeight: 500,
-                    position: 'sticky',
-                    top: 0,
-                  }}
-                >
-                  {col.name}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={i}>
-                {schema.map((col) => (
-                  <td
-                    key={col.name}
-                    style={{
-                      padding: '6px 8px',
-                      borderBottom: '1px solid var(--color-border)',
-                      maxWidth: 240,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                    }}
-                    title={String(row[col.name] ?? '')}
-                  >
-                    {row[col.name] === null || row[col.name] === undefined ? (
-                      <span style={{ color: 'var(--color-text-muted)' }}>—</span>
-                    ) : (
-                      String(row[col.name])
-                    )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <PaginatedTable
+        rows={rows}
+        columns={schema.map((c) => c.name)}
+        pageSize={25}
+        maxHeight={400}
+        emptyText={t('common.emptyData')}
+      />
     </div>
   );
 }

@@ -25,6 +25,9 @@ logger = get_logger(__name__)
 #   data: {"type": "progress", "message": "...", "elapsed_ms": 1234}
 #
 #   event: chunk
+#   data: {"type": "token", "text": "Hello, ", "delta": 7}
+#
+#   event: chunk
 #   data: {"type": "data", "content": [{...}, ...], "chunk_index": 2,
 #          "chunk_count": 5, "rows_sent": 80, "rows_total": 200}
 #
@@ -168,10 +171,6 @@ async def stream_chat(
     from ..agents.graph import build_graph, initial_state
 
     try:
-        graph = build_graph(
-            data_source_id=active_data_source_id,
-            chat_history=history,
-        )
         state = initial_state(
             session_id=active_session_id,
             message=message,
@@ -191,19 +190,96 @@ async def stream_chat(
         },
     )
 
-    # 3. Run the graph. This is the slow part. We don't stream LLM tokens
-    # here -- the LLM still gets the full message at the end. The streaming
-    # surface is the SQL result rows.
+    # 3. Run the graph concurrently with a token consumer. The model's
+    # astream() in the `model` node pushes text chunks into a queue via
+    # `token_cb`; the consumer loop below drains the queue and yields SSE
+    # token events while the graph itself runs. This is what makes
+    # "Hello, " appear on the client before the rest of the response is
+    # ready. The graph task pushes a SENTINEL onto the queue when it
+    # finishes, so the consumer can drain and exit deterministically.
     graph_started = time.perf_counter()
+    token_queue: asyncio.Queue[str | None] = asyncio.Queue(maxsize=512)
+    SENTINEL = "__graph_done__"
+
+    def _enqueue_token(text: str) -> None:
+        # Called from the LLM's astream loop on the same event loop, so
+        # put_nowait is safe -- the consumer is awaiting in the same loop.
+        try:
+            token_queue.put_nowait(text)
+        except asyncio.QueueFull:
+            # Backpressure: drop the chunk but keep the consumer alive.
+            # A full queue means the client is too slow; better to skip a
+            # token than to block the LLM stream.
+            logger.warning("token queue full; dropping chunk")
+
+    graph = build_graph(
+        data_source_id=active_data_source_id,
+        chat_history=history,
+        token_cb=_enqueue_token,
+    )
+
+    async def _run_graph() -> dict[str, Any]:
+        return await graph.ainvoke(
+            state,
+            config={"configurable": {}, "recursion_limit": 25},
+        )
+
+    graph_task = asyncio.create_task(_run_graph())
+
+    def _on_graph_done(task: asyncio.Task) -> None:
+        # Push the sentinel even if the task raised -- the consumer
+        # distinguishes "completed normally" via the awaited `result()`
+        # call below.
+        try:
+            token_queue.put_nowait(SENTINEL)
+        except asyncio.QueueFull:
+            # Theoretically impossible: a 512-deep queue + a 6-char
+            # sentinel shouldn't fill it. If it does, drain one item to
+            # make room rather than block the callback.
+            try:
+                token_queue.get_nowait()
+                token_queue.put_nowait(SENTINEL)
+            except Exception:  # pragma: no cover
+                logger.exception("failed to push graph-done sentinel")
+
+    graph_task.add_done_callback(_on_graph_done)
+
     try:
-        result = await graph.ainvoke(state)
+        while True:
+            text = await token_queue.get()
+            if text == SENTINEL:
+                break
+            yield _sse(
+                "chunk",
+                {"type": "token", "text": text, "delta": len(text)},
+            )
+    except asyncio.CancelledError:
+        graph_task.cancel()
+        raise
     except Exception as e:
+        graph_task.cancel()
+        logger.exception("stream consumer failed")
+        yield _sse(
+            "error",
+            {"type": "error", "code": 500, "message": f"Stream error: {e}"},
+        )
+        return
+
+    if graph_task.cancelled():
+        yield _sse(
+            "error",
+            {"type": "error", "code": 500, "message": "Chat cancelled"},
+        )
+        return
+    exc = graph_task.exception()
+    if exc is not None:
         logger.exception("graph run failed")
         yield _sse(
             "error",
-            {"type": "error", "code": 500, "message": f"Chat failed: {e}"},
+            {"type": "error", "code": 500, "message": f"Chat failed: {exc}"},
         )
         return
+    result = graph_task.result()
     graph_elapsed_s = time.perf_counter() - graph_started
 
     messages = result.get("messages") or []

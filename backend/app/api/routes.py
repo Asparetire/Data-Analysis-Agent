@@ -13,12 +13,13 @@ from ..models.schemas import (
     ChatRequest,
     ChatResponse,
     DataSource,
+    DataSourceRename,
     SessionCreateResponse,
     SessionUpdate,
     SessionView,
     UploadResponse,
 )
-from ..services import chat_service, data_service, session_service, streaming
+from ..services import chat_service, data_service, metadata_service, session_service, streaming
 from ..services.chat_service import SessionBindingError
 from ..utils.logger import get_logger
 
@@ -124,15 +125,54 @@ async def get_datasources():
         ext = path.suffix.lower().lstrip(".")
         ds_type = "csv" if ext == "csv" else "excel" if ext in {"xlsx", "xls"} else "json"
         stat = path.stat()
+        custom_name = metadata_service.get_display_name(file_id)
         items.append(
             DataSource(
                 id=file_id,
-                name=path.name,
+                name=custom_name or path.name,
+                filename=path.name,
                 type=ds_type,
                 created_at=datetime.fromtimestamp(stat.st_mtime),
             )
         )
     return items
+
+
+@router.patch("/datasources/{data_source_id}", response_model=DataSource)
+async def rename_datasource(data_source_id: str, body: DataSourceRename):
+    """Set a custom display name for a data source.
+
+    The display name is a separate field from the on-disk filename; renaming
+    it does not move the underlying file or rewrite the SQLite database.
+    Passing an empty string is rejected by the schema (min_length=1).
+    """
+    uploads_dir = Path(settings.DATA_DIR) / "uploads"
+    matching = None
+    if uploads_dir.exists():
+        for path in uploads_dir.iterdir():
+            if path.stem == data_source_id and path.suffix.lower() in {
+                ".csv",
+                ".xlsx",
+                ".xls",
+                ".json",
+            }:
+                matching = path
+                break
+    if matching is None:
+        raise HTTPException(status_code=404, detail="Data source not found")
+    try:
+        new_name = metadata_service.set_display_name(data_source_id, body.display_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    ext = matching.suffix.lower().lstrip(".")
+    ds_type = "csv" if ext == "csv" else "excel" if ext in {"xlsx", "xls"} else "json"
+    return DataSource(
+        id=data_source_id,
+        name=new_name,
+        filename=matching.name,
+        type=ds_type,
+        created_at=datetime.fromtimestamp(matching.stat().st_mtime),
+    )
 
 
 @router.get("/datasources/{data_source_id}/preview")
@@ -159,6 +199,9 @@ async def delete_datasource(data_source_id: str):
     deleted = data_service.delete_data_source(data_source_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Data source not found")
+    # Forget any custom display name we held for this id, otherwise the
+    # sidecar would grow stale entries across uploads.
+    metadata_service.delete_entry(data_source_id)
     sessions_removed = await session_service.delete_sessions_by_data_source(data_source_id)
     return {
         "status": "ok",
