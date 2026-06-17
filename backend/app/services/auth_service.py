@@ -59,23 +59,22 @@ def _iso(ts: datetime) -> str:
 # ---------------------------------------------------------------------------
 
 
+_INIT_USERS_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    is_active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+)
+"""
+
+
 def init_users_table() -> None:
     """Create the users table if missing. Idempotent."""
     engine = get_engine(None)
     with engine.begin() as conn:
-        conn.execute(
-            text(
-                """
-                CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    email TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    is_active INTEGER NOT NULL DEFAULT 1,
-                    created_at TEXT NOT NULL
-                )
-                """
-            )
-        )
+        conn.execute(text(_INIT_USERS_SQL))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
 
 
