@@ -360,6 +360,62 @@ def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, A
     return {"table": target, "row_count": count, "columns": columns}
 
 
+def fetch_rows(
+    data_source_id: str,
+    *,
+    table: str,
+    offset: int = 0,
+    limit: int = 20,
+    sort: str | None = None,
+    direction: str = "asc",
+) -> dict | None:
+    """Phase 4D: server-side paginated read from one table.
+
+    Returns ``{table, rows, columns, total, offset, limit}`` or None when
+    the table doesn't exist. ``sort`` must be a real column of the table;
+    ``direction`` must be ``asc`` or ``desc``. Both are validated against
+    the table schema before being interpolated into SQL — the table name
+    and column names are quoted with double quotes, but we still refuse
+    anything that doesn't appear in PRAGMA table_info so a malicious
+    payload like ``"col"; DROP TABLE x; --`` can't slip through.
+    """
+    if direction.lower() not in ("asc", "desc"):
+        direction = "asc"
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 200))
+    engine = get_engine(data_source_id)
+    try:
+        with engine.connect() as conn:
+            # Validate table + columns against PRAGMA before any interpolation.
+            info = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
+            if not info:
+                return None
+            valid_cols = {r[1] for r in info}
+            count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar()
+            # Build ORDER BY. Stable secondary sort on rowid so pages don't
+            # shuffle rows with equal sort keys.
+            if sort and sort in valid_cols:
+                order_clause = f' ORDER BY "{sort}" {direction.upper()}, rowid'
+            else:
+                order_clause = " ORDER BY rowid"
+            result = conn.execute(
+                text(f'SELECT * FROM "{table}"{order_clause} LIMIT :lim OFFSET :off'),
+                {"lim": limit, "off": offset},
+            )
+            cols = list(result.keys())
+            rows = [{c: row[i] for i, c in enumerate(cols)} for row in result.fetchall()]
+    except Exception:
+        return None
+    return {
+        "table": table,
+        "rows": rows,
+        "columns": cols,
+        "total": int(count or 0),
+        "offset": offset,
+        "limit": limit,
+    }
+
+
 def delete_data_source(data_source_id: str) -> bool:
     """Remove the uploaded file, the SQLite database, and drop the cached engine.
 

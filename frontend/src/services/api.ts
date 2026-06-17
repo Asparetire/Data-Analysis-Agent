@@ -126,9 +126,43 @@ export const previewDataSource = async (id: string, limit = 5) => {
   return response.data;
 };
 
-export const schemaDataSource = async (id: string) => {
+export const schemaDataSource = async (id: string, table?: string) => {
   const response = await api.get<{ schema: { name: string; type: string }[] }>(
     `/datasources/${id}/schema`,
+    { params: table ? { table } : undefined },
+  );
+  return response.data;
+};
+
+// Phase 4D: server-side pagination. The browser keeps offset/limit/sort state
+// and asks the server for one page at a time, so we never load more than the
+// page size into memory — important when a table has 100k+ rows.
+export interface RowsPage {
+  table: string;
+  rows: Record<string, unknown>[];
+  columns: string[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export const fetchRows = async (
+  id: string,
+  params: {
+    table?: string;
+    offset?: number;
+    limit?: number;
+    sort?: string;
+    dir?: 'asc' | 'desc';
+  },
+) => {
+  const response = await api.get<RowsPage>(`/datasources/${id}/rows`, { params });
+  return response.data;
+};
+
+export const listTables = async (id: string) => {
+  const response = await api.get<{ tables: { name: string; row_count: number }[] }>(
+    `/datasources/${id}/tables`,
   );
   return response.data;
 };

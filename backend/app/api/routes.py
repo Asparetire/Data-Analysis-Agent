@@ -238,15 +238,69 @@ async def preview_datasource(
 @router.get("/datasources/{data_source_id}/schema")
 async def schema_datasource(
     data_source_id: str,
+    table: str | None = None,
     user: dict = Depends(current_user),
 ):
     _check_datasource_owner(data_source_id, user)
-    rows = data_service.get_sample_rows(data_source_id, limit=1)
+    rows = data_service.get_sample_rows(data_source_id, limit=1, table=table)
     if rows is None:
         raise HTTPException(status_code=404, detail="Data source not found or empty")
     sample = rows[0]
     schema = [{"name": k, "type": _infer_type(v)} for k, v in sample.items()]
     return {"schema": schema}
+
+
+@router.get("/datasources/{data_source_id}/rows")
+async def rows_datasource(
+    data_source_id: str,
+    table: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+    sort: str | None = None,
+    dir: str = "asc",  # noqa: A002 — `dir` is the natural query-param name
+    user: dict = Depends(current_user),
+):
+    """Phase 4D: server-side paginated browse of a single table.
+
+    Defaults to the primary table when ``table`` is omitted. Sort column
+    must exist on the table; direction must be ``asc`` or ``desc``. The
+    data service validates both against ``PRAGMA table_info`` before
+    interpolating them into SQL.
+    """
+    _check_datasource_owner(data_source_id, user)
+    target = table or data_service.get_primary_table(data_source_id)
+    payload = data_service.fetch_rows(
+        data_source_id,
+        table=target,
+        offset=offset,
+        limit=limit,
+        sort=sort,
+        direction=dir,
+    )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Table not found")
+    # Phase 4C layer 2: mask PII in the rows leaving the API, even though
+    # upload-time scrub already ran. Defense in depth.
+    from ..utils.pii_mask import mask_rows
+
+    payload["rows"] = mask_rows(payload["rows"])
+    return payload
+
+
+@router.get("/datasources/{data_source_id}/tables")
+async def tables_datasource(
+    data_source_id: str,
+    user: dict = Depends(current_user),
+):
+    """Phase 4D: list tables in this data source for the table browser."""
+    _check_datasource_owner(data_source_id, user)
+    names = data_service.list_tables(data_source_id)
+    # Annotate with row counts so the UI can hint at which sheet is big.
+    out = []
+    for name in names:
+        info = data_service.get_table_info(data_source_id, name)
+        out.append({"name": name, "row_count": info.get("row_count", 0) if info else 0})
+    return {"tables": out}
 
 
 @router.get("/datasources/{data_source_id}/lineage", response_model=LineageResponse)
