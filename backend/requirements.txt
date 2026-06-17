@@ -14,6 +14,8 @@ anyio==4.13.0
     #   openai
     #   sse-starlette
     #   starlette
+bcrypt==4.2.0
+    # via -r requirements.in
 certifi==2026.5.20
     # via
     #   httpcore
@@ -29,6 +31,10 @@ colorama==0.4.6
     #   tqdm
 distro==1.9.0
     # via openai
+dnspython==2.7.0
+    # via email-validator
+email-validator==2.2.0
+    # via -r requirements.in
 et-xmlfile==2.0.0
     # via openpyxl
 fastapi==0.136.3
@@ -53,6 +59,8 @@ idna==3.18
     #   requests
 jiter==0.15.0
     # via openai
+pyjwt==2.10.1
+    # via -r requirements.in
 jsonpatch==1.33
     # via langchain-core
 jsonpointer==3.1.1

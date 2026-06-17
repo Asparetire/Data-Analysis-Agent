@@ -4,7 +4,9 @@ import type {
   DataSource,
   LineageResponse,
   SessionView,
+  TokenResponse,
   UploadResponse,
+  UserView,
 } from '../types';
 
 // Relative base URL so the Vite dev server's /api proxy and any production
@@ -17,6 +19,86 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Phase 4A: attach the JWT to every request. The token lives in localStorage
+// (see authStore) — reading it lazily here avoids a circular import with
+// the Zustand store and stays in sync even when login/logout rotates it.
+api.interceptors.request.use((config) => {
+  try {
+    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
+    if (token) {
+      config.headers = config.headers ?? {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    /* localStorage may be unavailable (private mode) — ignore */
+  }
+  return config;
+});
+
+// Phase 4A: on 401, try a single refresh-token rotation, then replay the
+// request once. If refresh fails, drop the stored tokens and let the caller
+// surface the error (the route guard will redirect to /login).
+let refreshPromise: Promise<string | null> | null = null;
+
+api.interceptors.response.use(
+  (resp) => resp,
+  async (error) => {
+    const original = error.config ?? {};
+    if (
+      error.response?.status === 401 &&
+      !original.__retried &&
+      !original.url?.includes('/auth/')
+    ) {
+      original.__retried = true;
+      if (!refreshPromise) {
+        // Lazy import to avoid a cycle: authStore imports this module.
+        const { useAuthStore } = await import('../store/authStore');
+        refreshPromise = useAuthStore
+          .getState()
+          .tryRefresh()
+          .finally(() => {
+            refreshPromise = null;
+          });
+      }
+      const newToken = await refreshPromise;
+      if (newToken) {
+        original.headers = original.headers ?? {};
+        original.headers.Authorization = `Bearer ${newToken}`;
+        return api(original);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Auth (Phase 4A)
+// ---------------------------------------------------------------------------
+
+export const register = async (email: string, password: string) => {
+  const resp = await api.post<TokenResponse>('/auth/register', { email, password });
+  return resp.data;
+};
+
+export const login = async (email: string, password: string) => {
+  const resp = await api.post<TokenResponse>('/auth/login', { email, password });
+  return resp.data;
+};
+
+export const refresh = async (refreshToken: string) => {
+  const resp = await api.post<TokenResponse>('/auth/refresh', { refresh_token: refreshToken });
+  return resp.data;
+};
+
+export const logout = async (refreshToken: string) => {
+  await api.post('/auth/logout', { refresh_token: refreshToken });
+};
+
+export const getCurrentUser = async () => {
+  const resp = await api.get<UserView>('/auth/me');
+  return resp.data;
+};
 
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
@@ -156,9 +238,19 @@ export async function* streamChat(
   if (dataSourceIds && dataSourceIds.length > 0) {
     body.data_source_ids = dataSourceIds;
   }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  };
+  try {
+    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* ignore */
+  }
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers,
     body: JSON.stringify(body),
   });
 

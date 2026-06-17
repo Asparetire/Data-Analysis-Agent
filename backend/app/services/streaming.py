@@ -9,12 +9,20 @@ from typing import Any
 from ..services import session_service
 from ..services.chat_service import (
     SessionBindingError,
+    SessionForbidden,
+    SessionNotFound,
+    _assert_owns_data_sources,
     _extract_final_text,
     _resolve_session,
 )
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class StreamForbidden(Exception):
+    """Raised when the user lacks ownership of the session or bound sources."""
+
 
 # ---------------------------------------------------------------------------
 # Streaming protocol
@@ -129,16 +137,26 @@ async def stream_chat(
     message: str,
     data_source_id: str | None = None,
     data_source_ids: list[str] | None = None,
+    *,
+    owner_id: str | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield SSE events for a single chat turn.
 
     See the module docstring for the wire format.
+
+    Phase 4A: when ``owner_id`` is supplied, sessions and data sources not
+    owned by that user short-circuit to a single ``error`` event instead of
+    running the graph.
     """
     run_started = time.perf_counter()
 
     # 1. Session resolution (reuses the same rules as the non-streaming path).
     try:
-        session = await _resolve_session(session_id, data_source_id, data_source_ids)
+        session = await _resolve_session(
+            session_id, data_source_id, data_source_ids, owner_id=owner_id
+        )
+    except (SessionNotFound, SessionForbidden) as e:
+        raise StreamForbidden(str(e)) from e
     except SessionBindingError as e:
         yield _sse(
             "error",
@@ -158,6 +176,13 @@ async def stream_chat(
     all_ids = list(session.get("data_source_ids") or [])
     if active_data_source_id and active_data_source_id not in all_ids:
         all_ids.insert(0, active_data_source_id)
+
+    if owner_id is not None and all_ids:
+        try:
+            _assert_owns_data_sources(owner_id, all_ids)
+        except SessionForbidden as e:
+            raise StreamForbidden(str(e)) from e
+
     history = session.get("chat_history") or []
 
     yield _sse(

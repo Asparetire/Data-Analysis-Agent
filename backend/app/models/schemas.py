@@ -3,7 +3,42 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, EmailStr, Field
+
+
+class UserRegister(BaseModel):
+    """POST /auth/register body."""
+
+    email: EmailStr
+    password: str = Field(min_length=8, max_length=128)
+
+
+class UserLogin(BaseModel):
+    """POST /auth/login body."""
+
+    email: EmailStr
+    password: str = Field(min_length=1, max_length=128)
+
+
+class TokenResponse(BaseModel):
+    """Returned by /auth/login, /auth/register, /auth/refresh."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    expires_in: int
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class UserView(BaseModel):
+    """Returned by /auth/me and embedded in TokenResponse payloads."""
+
+    id: str
+    email: str
+    is_active: bool = True
 
 
 class ChatMessageItem(BaseModel):

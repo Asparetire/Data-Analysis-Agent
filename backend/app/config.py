@@ -37,6 +37,22 @@ class Settings(BaseSettings):
     # CORS：从环境变量读 JSON 字符串，例如 '["http://localhost:5173"]'
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
+    # Phase 4: 认证 / JWT
+    # JWT_SECRET 应在 .env 中覆盖；保留默认值只为本地开发不被卡住。
+    JWT_SECRET: str = "dev-only-change-me-in-prod"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_TTL_MINUTES: int = 15
+    REFRESH_TOKEN_TTL_DAYS: int = 7
+
+    # 首次启动且 main.db 中已有无主数据源时，把它们绑定到这个默认用户。
+    # 仅在迁移路径下创建；之后用户应自行注册。
+    MIGRATION_ADMIN_EMAIL: str = "admin@local.invalid"
+    MIGRATION_ADMIN_PASSWORD: str = "change-me-now"
+
+    # Phase 4B: 限流（按用户 / 按 IP 的 sliding window，每分钟）
+    RATE_LIMIT_PER_USER_PER_MINUTE: int = 60
+    RATE_LIMIT_PER_IP_PER_MINUTE: int = 20
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _parse_cors(cls, v):
