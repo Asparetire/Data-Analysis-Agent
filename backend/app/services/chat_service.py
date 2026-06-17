@@ -169,6 +169,7 @@ async def run_chat(
         data_source_id=active_data_source_id,
         data_source_ids=all_ids,
         chat_history=history,
+        owner_id=owner_id,
     )
     state = initial_state(
         session_id=active_session_id,

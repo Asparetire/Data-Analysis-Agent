@@ -61,6 +61,7 @@ def record_query(
     cache_hit: bool = False,
     error: str | None = None,
     tables: list[str] | None = None,
+    user_id: str | None = None,
 ) -> None:
     """Append a single lineage entry to every bound data source.
 
@@ -68,6 +69,10 @@ def record_query(
     record across each binding. If a binding is missing the record is
     silently dropped -- lineage is best-effort, it must not block the
     query path.
+
+    Phase 4A/4B: ``user_id`` is recorded so audits can attribute queries
+    to users. Pre-Phase-4 records (and tests that don't pass it) leave the
+    field absent, which the LineageEntry schema tolerates.
     """
     record: dict[str, Any] = {
         "ts": time.time(),
@@ -79,6 +84,8 @@ def record_query(
         "ok": bool(ok),
         "cache_hit": bool(cache_hit),
     }
+    if user_id:
+        record["user_id"] = user_id
     if error:
         record["error"] = str(error)[:500]
     for sid in source_ids:

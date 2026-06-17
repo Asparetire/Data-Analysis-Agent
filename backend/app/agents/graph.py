@@ -178,6 +178,8 @@ def build_graph(
     data_source_ids: Sequence[str] | None = None,
     chat_history: Sequence[dict] | None = None,
     token_cb: TokenCallback | None = None,
+    *,
+    owner_id: str | None = None,
 ):
     """Build a LangGraph compiled graph for a given data source.
 
@@ -196,6 +198,9 @@ def build_graph(
     Intermediate reasoning tokens -- those streamed before the model decides
     to call a tool -- are swallowed because users would find them noisy and
     they're frequently reformulated anyway.
+
+    Phase 4B: ``owner_id`` is forwarded to ``build_tools`` so each
+    ``query_database`` invocation can stamp the user on its lineage record.
     """
     all_ids: list[str] = []
     if data_source_id:
@@ -203,7 +208,7 @@ def build_graph(
     for i in data_source_ids or []:
         if i and i not in all_ids:
             all_ids.append(i)
-    tools = build_tools(all_ids)
+    tools = build_tools(all_ids, owner_id=owner_id)
     llm = _build_llm().bind_tools(tools)
     tool_node = ToolNode(tools)
     prior_messages = history_to_messages(chat_history or [])

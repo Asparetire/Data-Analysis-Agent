@@ -140,6 +140,7 @@ class LineageEntry(BaseModel):
     ok: bool = True
     cache_hit: bool = False
     error: str | None = None
+    user_id: str | None = None  # Phase 4B: who ran the query
 
 
 class LineageResponse(BaseModel):

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .api.auth_routes import router as auth_router
+from .api.middleware import RateLimitMiddleware
 from .api.routes import router
 from .config import settings
 from .services import auth_service
@@ -23,6 +24,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Phase 4B: per-user / per-IP sliding window rate limit on expensive routes.
+app.add_middleware(RateLimitMiddleware)
 
 # 注册路由
 app.include_router(router, prefix=settings.API_V1_STR)

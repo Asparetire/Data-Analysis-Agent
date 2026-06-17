@@ -93,13 +93,20 @@ def _resolve_source_table(
     return primary, table_name
 
 
-def build_tools(data_source_ids: str | list[str] | None) -> list:
+def build_tools(
+    data_source_ids: str | list[str] | None,
+    *,
+    owner_id: str | None = None,
+) -> list:
     """Build the agent's tool list.
 
     Accepts a single id (backward-compat) or a list of ids. The first id
     is the primary; any others are ATTACHed to the same connection for
     cross-source JOINs. The LLM refers to them as ``ds_0`` (primary) and
     ``ds_1``/``ds_2``/... (auxiliary, in the order they were passed).
+
+    Phase 4B: ``owner_id`` is captured by the ``query_database`` closure
+    so every lineage record attributes the query to the user who ran it.
     """
     if data_source_ids is None:
         ids: list[str] = []
@@ -154,6 +161,7 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 row_count=cached.get("row_count", 0),
                 duration_ms=elapsed_ms,
                 cache_hit=True,
+                user_id=owner_id,
             )
             payload = {
                 "row_count": cached.get("row_count", 0),
@@ -204,6 +212,7 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 row_count=len(data),
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
             )
             return json.dumps(
                 {
@@ -222,6 +231,7 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 ok=False,
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
                 error=str(e),
             )
             return json.dumps({"error": f"SQL error: {e}"}, ensure_ascii=False)
@@ -233,6 +243,7 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 ok=False,
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
                 error=str(e),
             )
             logger.exception("query_database failed")

@@ -246,6 +246,7 @@ async def stream_chat(
         data_source_ids=all_ids,
         chat_history=history,
         token_cb=_enqueue_token,
+        owner_id=owner_id,
     )
 
     async def _run_graph() -> dict[str, Any]:
