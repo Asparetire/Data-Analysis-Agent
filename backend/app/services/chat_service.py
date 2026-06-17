@@ -12,7 +12,12 @@ logger = get_logger(__name__)
 
 
 class SessionBindingError(Exception):
-    """Raised when a request's data_source_id conflicts with the session's binding."""
+    """Raised when a single-id request conflicts with the session's primary.
+
+    Phase 3C: sessions can hold multiple bindings, so the only remaining
+    conflict case is ``data_source_id`` (singular) disagreeing with the
+    primary. Multi-id requests are merged in instead.
+    """
 
     def __init__(self, bound_to: str, requested: str):
         self.bound_to = bound_to
@@ -21,7 +26,7 @@ class SessionBindingError(Exception):
 
 
 def _extract_final_text(messages) -> str:
-    """Return the content of the most recent AI message, or ""."""
+    """Return the content of the most recent AI message, or ''."""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage):
             content = msg.content
@@ -35,28 +40,48 @@ def _extract_final_text(messages) -> str:
     return ""
 
 
-async def _resolve_session(session_id: str, data_source_id: str | None) -> dict:
-    """Get (or create) the session and apply the data_source_id binding rules.
+async def _resolve_session(
+    session_id: str,
+    data_source_id: str | None,
+    data_source_ids: list[str] | None,
+) -> dict:
+    """Get (or create) the session and merge in the requested bindings.
 
     Rules:
-    - If the session is missing, create one. Bind the requested data_source_id.
-    - If the session already has a data_source_id, the request must match it.
-    - If the session has no data_source_id yet, bind the requested one.
+    - Missing session: create one and bind the requested ids (deduped).
+    - Single-id request that disagrees with the primary: still an error.
+    - Multi-id request: merged into the session's binding list.
+    - Single-id request with no primary yet: bind it.
     """
     session = await session_service.get_session(session_id)
     if session is None:
         new_id = await session_service.create_session()
-        if data_source_id:
-            session = await session_service.bind_data_source(new_id, data_source_id)
+        merged: list[str] = []
+        if data_source_id and data_source_id not in merged:
+            merged.append(data_source_id)
+        if data_source_ids:
+            for i in data_source_ids:
+                if i and i not in merged:
+                    merged.append(i)
+        if merged:
+            session = await session_service.set_data_source_ids(new_id, merged)
         else:
             session = await session_service.get_session(new_id)
         return session  # type: ignore[return-value]
 
-    bound = session.get("data_source_id")
-    if bound and data_source_id and bound != data_source_id:
-        raise SessionBindingError(bound_to=bound, requested=data_source_id)
+    bound_primary = session.get("data_source_id")
+    if data_source_id and bound_primary and data_source_id != bound_primary and not data_source_ids:
+        raise SessionBindingError(bound_to=bound_primary, requested=data_source_id)
 
-    if not bound and data_source_id:
+    if data_source_ids:
+        existing = list(session.get("data_source_ids") or [])
+        if data_source_id and data_source_id not in existing:
+            existing.append(data_source_id)
+        for i in data_source_ids:
+            if i and i not in existing:
+                existing.append(i)
+        session = await session_service.set_data_source_ids(session_id, existing)  # type: ignore[assignment]
+    elif data_source_id and not bound_primary:
         session = await session_service.bind_data_source(session_id, data_source_id)
     return session  # type: ignore[return-value]
 
@@ -65,10 +90,11 @@ async def run_chat(
     session_id: str,
     message: str,
     data_source_id: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> ChatResponse:
     """Run one chat turn with Redis-backed session memory."""
     try:
-        session = await _resolve_session(session_id, data_source_id)
+        session = await _resolve_session(session_id, data_source_id, data_source_ids)
     except SessionBindingError as e:
         return ChatResponse(
             session_id=session_id,
@@ -85,6 +111,9 @@ async def run_chat(
 
     active_session_id = session["session_id"]
     active_data_source_id = session.get("data_source_id")
+    all_ids = list(session.get("data_source_ids") or [])
+    if active_data_source_id and active_data_source_id not in all_ids:
+        all_ids.insert(0, active_data_source_id)
     history = session.get("chat_history") or []
 
     # Local import: app.agents.graph transitively imports app.services
@@ -93,6 +122,7 @@ async def run_chat(
 
     graph = build_graph(
         data_source_id=active_data_source_id,
+        data_source_ids=all_ids,
         chat_history=history,
     )
     state = initial_state(

@@ -22,14 +22,14 @@ from .tools import build_tools
 
 SYSTEM_PROMPT = """你是一个专业的数据分析助手。用户会先上传 CSV/Excel 等数据文件（可能含多 Sheet），然后用自然语言向你提问。
 工作流程：
-1. 第一次回答前，先调用 list_tables 了解当前数据源有哪些表、各表行数与列类型。
-2. 对感兴趣的表调用 get_table_schema(table_name=...) 获取列的详细类型、用户自定义描述、单位、示例值。get_sample_rows 可在不确定语义时拿几行看看。
-3. 通过 query_database 执行只读 SQL 查询获取数据（最多 100 行）。多表场景可写 JOIN,表名用 list_tables 返回的标识符。
+1. 第一次回答前，先调用 list_tables 了解当前会话绑定了哪些数据源、各源有哪些表、各表行数与列类型。list_tables 返回的 alias 标识了源：主源 alias="main"（表名裸写），其他附加源 alias="ds_1" / "ds_2"（表名须带前缀如 ds_1.orders）。
+2. 对感兴趣的表调用 get_table_schema(table_name=...) 获取列的详细类型、用户自定义描述、单位、示例值。主源表写裸名；附加源表写 ds_N.<table>。get_sample_rows 可在不确定语义时拿几行看看。
+3. 通过 query_database 执行只读 SQL 查询获取数据（最多 100 行）。多源场景可写 JOIN,主源表裸名、附加源表用 ds_N.<table>。
 4. 用中文清晰回答用户问题，必要时给出关键数字与解读。涉及到单位(金额/日期等)时,使用 schema 给定的 unit。
 5. 如果需要可视化，调用 create_chart 工具，把结构化数据传进去；系统会自动渲染为 ECharts 图表。
 6. 遇到错误时用友好语言告诉用户可能的原因，并给出修复建议。
 注意事项：
-- 只能生成 SELECT / WITH 开头的查询，禁止任何写操作（INSERT/UPDATE/DELETE/DROP 等）。
+- 只能生成 SELECT / WITH 开头的查询，禁止任何写操作（INSERT/UPDATE/DELETE/DROP 等），也不要写 ATTACH / DETACH（系统在工具内部处理）。
 - 列名含空格或特殊字符时用双引号包裹，例如 "Order ID"。
 - 表名也是标识符，多 Sheet Excel 的表名是 sanitize 后的 sheet 名（可能与原始名不同）；以 list_tables 返回值为准。
 - create_chart 工具的 chart_type 必须是 'bar'、'line'、'pie'、'scatter' 之一。
@@ -175,10 +175,17 @@ def history_to_messages(history: Sequence[dict]) -> list[BaseMessage]:
 
 def build_graph(
     data_source_id: str | None = None,
+    data_source_ids: Sequence[str] | None = None,
     chat_history: Sequence[dict] | None = None,
     token_cb: TokenCallback | None = None,
 ):
     """Build a LangGraph compiled graph for a given data source.
+
+    `data_source_ids` lists every source the session can query (the primary
+    first). When more than one is present, ``query_database`` ATTACHes the
+    non-primary sources so a single SQL can JOIN across them. The LLM
+    references them as ``ds_0.<table>`` (primary) and ``ds_1.<table>``,
+    ``ds_2.<table>`` etc.
 
     `chat_history` is prepended to the running messages so the LLM sees the
     full conversation. The current turn's HumanMessage is supplied separately
@@ -190,7 +197,13 @@ def build_graph(
     to call a tool -- are swallowed because users would find them noisy and
     they're frequently reformulated anyway.
     """
-    tools = build_tools(data_source_id)
+    all_ids: list[str] = []
+    if data_source_id:
+        all_ids.append(data_source_id)
+    for i in data_source_ids or []:
+        if i and i not in all_ids:
+            all_ids.append(i)
+    tools = build_tools(all_ids)
     llm = _build_llm().bind_tools(tools)
     tool_node = ToolNode(tools)
     prior_messages = history_to_messages(chat_history or [])

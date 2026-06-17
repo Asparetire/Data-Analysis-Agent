@@ -53,6 +53,7 @@ async def chat_endpoint(request: ChatRequest):
             session_id=request.session_id,
             message=request.message,
             data_source_id=request.data_source_id,
+            data_source_ids=request.data_source_ids,
         )
     except SessionBindingError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -81,6 +82,7 @@ async def chat_stream_endpoint(request: ChatRequest):
                 session_id=request.session_id,
                 message=request.message,
                 data_source_id=request.data_source_id,
+                data_source_ids=request.data_source_ids,
             ):
                 yield event
         except Exception as e:
@@ -231,6 +233,7 @@ async def get_session(session_id: str):
     return SessionView(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=session.get("chat_history", []),
         intermediate_results=session.get("intermediate_results"),
         last_query=session.get("last_query"),
@@ -248,6 +251,7 @@ async def create_session():
     return SessionCreateResponse(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=[],
         intermediate_results=None,
         last_query=None,
@@ -262,6 +266,9 @@ async def update_session(session_id: str, body: SessionUpdate):
     updates = body.model_dump(exclude_unset=True)
     if "data_source_id" in updates and updates["data_source_id"] == "":
         updates["data_source_id"] = None
+    if "data_source_ids" in updates and updates["data_source_ids"] is not None:
+        # Empty list means "clear all bindings"; treat null as a no-op.
+        updates["data_source_ids"] = list(updates["data_source_ids"])
     session = await session_service.update_session(session_id, updates)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
@@ -269,6 +276,7 @@ async def update_session(session_id: str, body: SessionUpdate):
     return SessionView(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=session.get("chat_history", []),
         intermediate_results=session.get("intermediate_results"),
         last_query=session.get("last_query"),

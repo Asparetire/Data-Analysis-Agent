@@ -17,10 +17,14 @@ interface ChatWindowProps {
 export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
   const { messages, isLoading, sendMessage, clearChat, abort, regenerate } = useChat();
   const activeName = useChatStore((s) => s.activeDataSourceName);
+  const dataSources = useChatStore((s) => s.dataSources);
+  const boundIds = useChatStore((s) => s.boundDataSourceIds);
   const t = useT();
   const [value, setValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const boundNames = boundIds.map((id) => dataSources.find((d) => d.id === id)?.name || id);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -88,6 +92,19 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
             {dataSourceId && activeName
               ? t('chat.currentDataSource', { name: activeName })
               : t('chat.noDataSource')}
+            {boundNames.length > 1 ? (
+              <span
+                className="bound-chips"
+                title={boundNames.join(' / ')}
+                style={{ marginLeft: 8 }}
+              >
+                {boundNames.slice(1).map((n) => (
+                  <span key={n} className="bound-chip">
+                    +{n}
+                  </span>
+                ))}
+              </span>
+            ) : null}
           </div>
         </div>
         <button

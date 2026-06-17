@@ -570,3 +570,42 @@ button {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Phase 3C: bound-data-source indicators */
+.bound-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-pill-active-bg);
+  color: var(--color-pill-active-fg);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.bound-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  vertical-align: middle;
+}
+.bound-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-pill-bg);
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 1.4;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-row-action.attached-mark {
+  color: var(--color-primary);
+  border-color: rgba(37, 99, 235, 0.3);
+  background: var(--color-pill-active-bg);
+}

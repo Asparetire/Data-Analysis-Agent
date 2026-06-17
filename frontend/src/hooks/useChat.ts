@@ -74,7 +74,13 @@ export function useChat() {
       cancelRef.current = controller;
 
       try {
-        for await (const evt of streamChat(activeSessionId, trimmed, dataSourceId)) {
+        const boundIds = useChatStore.getState().boundDataSourceIds;
+        for await (const evt of streamChat(
+          activeSessionId,
+          trimmed,
+          dataSourceId,
+          boundIds.length > 0 ? boundIds : undefined,
+        )) {
           if (controller.signal.aborted) break;
           handleStreamEvent(evt, activeSessionId, setSessionId);
         }

@@ -128,6 +128,7 @@ async def stream_chat(
     session_id: str,
     message: str,
     data_source_id: str | None = None,
+    data_source_ids: list[str] | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Yield SSE events for a single chat turn.
 
@@ -137,7 +138,7 @@ async def stream_chat(
 
     # 1. Session resolution (reuses the same rules as the non-streaming path).
     try:
-        session = await _resolve_session(session_id, data_source_id)
+        session = await _resolve_session(session_id, data_source_id, data_source_ids)
     except SessionBindingError as e:
         yield _sse(
             "error",
@@ -154,6 +155,9 @@ async def stream_chat(
 
     active_session_id = session["session_id"]
     active_data_source_id = session.get("data_source_id")
+    all_ids = list(session.get("data_source_ids") or [])
+    if active_data_source_id and active_data_source_id not in all_ids:
+        all_ids.insert(0, active_data_source_id)
     history = session.get("chat_history") or []
 
     yield _sse(
@@ -214,6 +218,7 @@ async def stream_chat(
 
     graph = build_graph(
         data_source_id=active_data_source_id,
+        data_source_ids=all_ids,
         chat_history=history,
         token_cb=_enqueue_token,
     )

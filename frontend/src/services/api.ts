@@ -59,6 +59,7 @@ export const updateSession = async (
   sessionId: string,
   updates: {
     data_source_id?: string | null;
+    data_source_ids?: string[];
     chat_history?: ChatMessageItem[];
     intermediate_results?: unknown;
     last_query?: string | null;
@@ -134,15 +135,18 @@ export async function* streamChat(
   sessionId: string,
   message: string,
   dataSourceId?: string,
+  dataSourceIds?: string[],
 ): AsyncGenerator<StreamEvent, void, void> {
+  const body: Record<string, unknown> = { session_id: sessionId, message };
+  if (dataSourceId) body.data_source_id = dataSourceId;
+  // Send the full list when we have one -- the server will merge/dedupe.
+  if (dataSourceIds && dataSourceIds.length > 0) {
+    body.data_source_ids = dataSourceIds;
+  }
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({
-      session_id: sessionId,
-      message,
-      data_source_id: dataSourceId,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok || !response.body) {

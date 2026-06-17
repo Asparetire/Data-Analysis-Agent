@@ -51,12 +51,17 @@ interface ChatState {
   restoreSession: (id: string) => Promise<SessionView | null>;
   resetSession: () => Promise<void>;
 
-  // Active data source
+  // Active data source (the "primary")
   activeDataSourceId: string | undefined;
   activeDataSourceName: string;
   setActiveDataSource: (ds: { id: string; name: string } | undefined) => void;
   dataSources: DataSource[];
   setDataSources: (list: DataSource[]) => void;
+
+  // Phase 3C: every data source the current session is bound to. The
+  // first entry is the primary; the rest are attached for JOINs.
+  boundDataSourceIds: string[];
+  setBoundDataSourceIds: (ids: string[]) => void;
 
   // Page navigation
   page: PageKey;
@@ -129,6 +134,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: (view.chat_history || []).map(toChatMessage),
         activeDataSourceId: view.data_source_id || undefined,
         activeDataSourceName: dataSourceName,
+        boundDataSourceIds: view.data_source_ids ?? [],
       });
       return view;
     } catch (e) {
@@ -151,9 +157,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       activeDataSourceId: ds?.id,
       activeDataSourceName: ds?.name ?? '',
+      // Toggling the active source also re-syncs the bound list. Single-
+      // source is the common case; the Sidebar wires this through.
+      boundDataSourceIds: ds ? [ds.id] : [],
     }),
   dataSources: [],
   setDataSources: (list) => set({ dataSources: list }),
+
+  boundDataSourceIds: [],
+  setBoundDataSourceIds: (ids) => set({ boundDataSourceIds: ids }),
 
   page: 'home',
   setPage: (p) => set({ page: p }),

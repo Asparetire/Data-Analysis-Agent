@@ -48,6 +48,8 @@ export interface UploadResponse {
 export interface SessionView {
   session_id: string;
   data_source_id?: string | null;
+  /** Phase 3C: every data source the session is bound to. First entry is the primary. */
+  data_source_ids?: string[];
   chat_history: ChatMessageItem[];
   intermediate_results?: unknown;
   last_query?: string | null;
