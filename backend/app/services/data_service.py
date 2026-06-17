@@ -184,9 +184,7 @@ def _auto_create_indexes(engine, table: str, df: pd.DataFrame) -> list[str]:
                 continue
             try:
                 conn.execute(
-                    text(
-                        f'CREATE INDEX IF NOT EXISTS "idx_{table}_{col}" ' f'ON "{table}" ("{col}")'
-                    )
+                    text(f'CREATE INDEX IF NOT EXISTS "idx_{table}_{col}" ON "{table}" ("{col}")')
                 )
                 indexed.append(col)
             except Exception as e:  # noqa: BLE001

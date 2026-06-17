@@ -160,7 +160,7 @@ async def test_unique_id_column_gets_indexed(tmp_data_dir, make_upload):
 
 async def test_low_cardinality_column_is_not_indexed(tmp_data_dir, make_upload):
     """A column with few unique values does NOT get an index."""
-    csv = "category,value\n" + "\n".join(f"cat_{i%3},{i}" for i in range(60))
+    csv = "category,value\n" + "\n".join(f"cat_{i % 3},{i}" for i in range(60))
     upload = make_upload("cats.csv", csv.encode())
     await data_service.save_uploaded_file(upload, "ds-cats")
 
