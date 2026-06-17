@@ -14,6 +14,8 @@ from ..models.schemas import (
     ChatResponse,
     DataSource,
     DataSourceRename,
+    LineageEntry,
+    LineageResponse,
     SessionCreateResponse,
     SessionUpdate,
     SessionView,
@@ -53,6 +55,7 @@ async def chat_endpoint(request: ChatRequest):
             session_id=request.session_id,
             message=request.message,
             data_source_id=request.data_source_id,
+            data_source_ids=request.data_source_ids,
         )
     except SessionBindingError as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
@@ -81,6 +84,7 @@ async def chat_stream_endpoint(request: ChatRequest):
                 session_id=request.session_id,
                 message=request.message,
                 data_source_id=request.data_source_id,
+                data_source_ids=request.data_source_ids,
             ):
                 yield event
         except Exception as e:
@@ -193,6 +197,26 @@ async def schema_datasource(data_source_id: str):
     return {"schema": schema}
 
 
+@router.get("/datasources/{data_source_id}/lineage", response_model=LineageResponse)
+async def lineage_datasource(data_source_id: str, limit: int = 50):
+    """Return the most-recent query lineage records for a data source.
+
+    ``limit`` is capped at 200 to keep the response small. Records are
+    returned newest-first; ``total`` reflects the untruncated count so
+    the UI can decide whether to offer a "show more" affordance.
+    """
+    cap = max(1, min(int(limit), 200))
+    raw = metadata_service.get_lineage(data_source_id, limit=cap)
+    # Full count for the UI: the on-disk cap is 200 (see metadata_service).
+    full = metadata_service.get_lineage(data_source_id, limit=None)
+    entries = [LineageEntry(**r) for r in raw if isinstance(r, dict)]
+    return LineageResponse(
+        data_source_id=data_source_id,
+        entries=entries,
+        total=len(full),
+    )
+
+
 @router.delete("/datasources/{data_source_id}")
 async def delete_datasource(data_source_id: str):
     """Remove the data source and cascade-delete any sessions bound to it."""
@@ -231,6 +255,7 @@ async def get_session(session_id: str):
     return SessionView(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=session.get("chat_history", []),
         intermediate_results=session.get("intermediate_results"),
         last_query=session.get("last_query"),
@@ -248,6 +273,7 @@ async def create_session():
     return SessionCreateResponse(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=[],
         intermediate_results=None,
         last_query=None,
@@ -262,6 +288,9 @@ async def update_session(session_id: str, body: SessionUpdate):
     updates = body.model_dump(exclude_unset=True)
     if "data_source_id" in updates and updates["data_source_id"] == "":
         updates["data_source_id"] = None
+    if "data_source_ids" in updates and updates["data_source_ids"] is not None:
+        # Empty list means "clear all bindings"; treat null as a no-op.
+        updates["data_source_ids"] = list(updates["data_source_ids"])
     session = await session_service.update_session(session_id, updates)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
@@ -269,6 +298,7 @@ async def update_session(session_id: str, body: SessionUpdate):
     return SessionView(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
+        data_source_ids=session.get("data_source_ids") or [],
         chat_history=session.get("chat_history", []),
         intermediate_results=session.get("intermediate_results"),
         last_query=session.get("last_query"),

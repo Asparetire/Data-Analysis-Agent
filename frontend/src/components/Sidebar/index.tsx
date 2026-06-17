@@ -9,10 +9,12 @@ import {
   X,
   Check,
   AlertTriangle,
+  History,
 } from 'lucide-react';
 import { useChatStore } from '../../store/chatStore';
 import { getDataSources, renameDataSource } from '../../services/api';
 import { useT } from '../../hooks/useUi';
+import LineagePanel from '../LineagePanel';
 
 const TYPE_LABEL: Record<string, string> = {
   csv: 'CSV',
@@ -46,11 +48,14 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
   const activeId = useChatStore((s) => s.activeDataSourceId);
   const activeName = useChatStore((s) => s.activeDataSourceName);
   const setActive = useChatStore((s) => s.setActiveDataSource);
+  const boundIds = useChatStore((s) => s.boundDataSourceIds);
+  const setBoundIds = useChatStore((s) => s.setBoundDataSourceIds);
   const uploadedFileName = useChatStore((s) => s.uploadedFileName);
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [pendingSwitch, setPendingSwitch] = useState<SwitchPrompt | null>(null);
+  const [lineageFor, setLineageFor] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -84,6 +89,20 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
     setActive(pendingSwitch.target);
     setPendingSwitch(null);
     onClose?.();
+  };
+
+  /**
+   * Phase 3C: toggle an auxiliary binding. Primary stays put; clicking
+   * adds/removes the id from `boundDataSourceIds` (which is what the chat
+   * request sends). The single-source UX (no checkbox) is unchanged.
+   */
+  const toggleAttach = (id: string) => {
+    if (id === activeId) return;
+    if (boundIds.includes(id)) {
+      setBoundIds(boundIds.filter((x) => x !== id));
+    } else {
+      setBoundIds([...boundIds, id]);
+    }
   };
 
   const startEdit = (ds: { id: string; name: string }) => {
@@ -155,6 +174,16 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
             <div className="ds-sub">
               <CheckCircle2 size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
               {t('sidebar.active')}
+              {boundIds.length > 1 ? (
+                <span
+                  className="bound-badge"
+                  title={boundIds
+                    .map((id) => dataSources.find((d) => d.id === id)?.name || id)
+                    .join(' / ')}
+                >
+                  {boundIds.length} 已绑
+                </span>
+              ) : null}
             </div>
           </div>
         </div>
@@ -182,10 +211,12 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
           <div className="datasource-list">
             {dataSources.map((ds) => {
               const isEditing = editingId === ds.id;
+              const isActive = activeId === ds.id;
+              const isAttached = !isActive && boundIds.includes(ds.id);
               return (
                 <div
                   key={ds.id}
-                  className={`datasource-item ${activeId === ds.id ? 'active' : ''}`}
+                  className={`datasource-item ${isActive ? 'active' : ''} ${isAttached ? 'attached' : ''}`}
                 >
                   {isEditing ? (
                     <>
@@ -230,6 +261,21 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
                         <span className="ds-name">{ds.name}</span>
                         <span className="ds-type">{TYPE_LABEL[ds.type] || ds.type}</span>
                       </button>
+                      {!isActive ? (
+                        <button
+                          type="button"
+                          className={`ds-row-action ${isAttached ? 'attached-mark' : ''}`}
+                          onClick={() => toggleAttach(ds.id)}
+                          title={isAttached ? '取消附加' : '附加到当前会话(JOIN)'}
+                          aria-pressed={isAttached}
+                        >
+                          <CheckCircle2 size={11} />
+                        </button>
+                      ) : (
+                        <span className="ds-row-action" title="当前主源">
+                          <CheckCircle2 size={11} />
+                        </span>
+                      )}
                       <button
                         type="button"
                         className="ds-row-action"
@@ -237,6 +283,14 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
                         title={t('sidebar.rename')}
                       >
                         <Pencil size={11} />
+                      </button>
+                      <button
+                        type="button"
+                        className="ds-row-action"
+                        onClick={() => setLineageFor({ id: ds.id, name: ds.name })}
+                        title={t('lineage.open')}
+                      >
+                        <History size={11} />
                       </button>
                       <DeleteButton id={ds.id} name={ds.name} />
                     </>
@@ -272,6 +326,14 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {lineageFor ? (
+        <LineagePanel
+          dataSourceId={lineageFor.id}
+          dataSourceName={lineageFor.name}
+          onClose={() => setLineageFor(null)}
+        />
       ) : null}
     </aside>
   );

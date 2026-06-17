@@ -19,6 +19,7 @@ MAX_CHAT_HISTORY = 50
 # Fields a client is allowed to write via update_session.
 _UPDATABLE_FIELDS = {
     "data_source_id",
+    "data_source_ids",
     "chat_history",
     "intermediate_results",
     "last_query",
@@ -38,6 +39,7 @@ def _empty_session(session_id: str) -> dict[str, Any]:
     return {
         "session_id": session_id,
         "data_source_id": None,
+        "data_source_ids": [],
         "chat_history": [],
         "intermediate_results": None,
         "last_query": None,
@@ -132,10 +134,12 @@ async def delete_session(session_id: str) -> bool:
 
 
 async def delete_sessions_by_data_source(data_source_id: str) -> int:
-    """Delete every session bound to the given data source.
+    """Remove the data source from every session that has it.
 
-    Returns the number of sessions removed. Uses SCAN so it does not block
-    Redis on large keyspaces. Sessions that cannot be parsed are skipped.
+    Sessions with only this source are deleted outright; sessions that
+    also bind other sources have the id stripped from their list and
+    their primary ``data_source_id`` repointed (or nulled) so the
+    remaining session is still usable.
     """
     redis = _get_redis()
     removed = 0
@@ -148,12 +152,26 @@ async def delete_sessions_by_data_source(data_source_id: str) -> int:
         except json.JSONDecodeError:
             logger.warning("malformed session at %s; skipping", key)
             continue
-        if session.get("data_source_id") == data_source_id:
+        primary = session.get("data_source_id")
+        ids = list(session.get("data_source_ids") or [])
+        if data_source_id not in ids and primary != data_source_id:
+            continue
+        # Drop the id from the list; if it was the primary, hand off to
+        # the first remaining entry (or null when there are none).
+        new_ids = [i for i in ids if i != data_source_id]
+        new_primary = (new_ids[0] if new_ids else None) if primary == data_source_id else primary
+        if not new_ids and not new_primary:
+            # The session is bound to nothing usable -- drop it.
             await redis.delete(key)
             removed += 1
+            continue
+        session["data_source_id"] = new_primary
+        session["data_source_ids"] = new_ids
+        session["updated_at"] = _utcnow()
+        await redis.setex(key, SESSION_TTL_SECONDS, _serialize(session))
     if removed:
         logger.info(
-            "removed %d sessions bound to data source %s",
+            "removed %d sessions whose only data source was %s",
             removed,
             data_source_id,
         )
@@ -216,18 +234,71 @@ async def set_intermediate(
 
 
 async def bind_data_source(session_id: str, data_source_id: str | None) -> dict[str, Any] | None:
-    """Set the session's data_source_id if not already set.
+    """Add ``data_source_id`` to the session's binding list.
 
-    Returns the (possibly unchanged) session, or None if missing. Used to enforce
-    the one-way binding between a session and its data source.
+    The first id added also becomes the session's primary ``data_source_id``;
+    subsequent additions are appended to ``data_source_ids`` so the LLM can
+    write JOINs across them. Returns the (possibly unchanged) session, or
+    None if missing.
     """
     raw = await _get_redis().get(_key(session_id))
     if not raw:
         return None
     session = json.loads(raw)
-    if session.get("data_source_id"):
+    if not data_source_id:
         return session
-    session["data_source_id"] = data_source_id
+    ids = list(session.get("data_source_ids") or [])
+    if data_source_id in ids:
+        return session
+    ids.append(data_source_id)
+    session["data_source_ids"] = ids
+    if not session.get("data_source_id"):
+        session["data_source_id"] = data_source_id
+    session["updated_at"] = _utcnow()
+    await _get_redis().setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(session))
+    return session
+
+
+async def unbind_data_source(session_id: str, data_source_id: str) -> dict[str, Any] | None:
+    """Remove ``data_source_id`` from the session's binding list.
+
+    If it was the primary, the next remaining id takes its place. The
+    session itself is NOT deleted -- callers decide whether to drop a
+    session that ends up with no bindings (see ``delete_sessions_by_data_source``).
+    """
+    raw = await _get_redis().get(_key(session_id))
+    if not raw:
+        return None
+    session = json.loads(raw)
+    ids = [i for i in (session.get("data_source_ids") or []) if i != data_source_id]
+    session["data_source_ids"] = ids
+    if session.get("data_source_id") == data_source_id:
+        session["data_source_id"] = ids[0] if ids else None
+    session["updated_at"] = _utcnow()
+    await _get_redis().setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(session))
+    return session
+
+
+async def set_data_source_ids(session_id: str, data_source_ids: list[str]) -> dict[str, Any] | None:
+    """Replace the session's binding list wholesale.
+
+    Used by update_session when the client PATCHes the full list (e.g. after
+    multi-select on the sidebar). The first id in the new list becomes the
+    primary; an empty list clears all bindings.
+    """
+    raw = await _get_redis().get(_key(session_id))
+    if not raw:
+        return None
+    session = json.loads(raw)
+    # Dedup while preserving order.
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for i in data_source_ids:
+        if i and i not in seen:
+            seen.add(i)
+            deduped.append(i)
+    session["data_source_ids"] = deduped
+    session["data_source_id"] = deduped[0] if deduped else None
     session["updated_at"] = _utcnow()
     await _get_redis().setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(session))
     return session

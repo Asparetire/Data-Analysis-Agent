@@ -48,10 +48,31 @@ export interface UploadResponse {
 export interface SessionView {
   session_id: string;
   data_source_id?: string | null;
+  /** Phase 3C: every data source the session is bound to. First entry is the primary. */
+  data_source_ids?: string[];
   chat_history: ChatMessageItem[];
   intermediate_results?: unknown;
   last_query?: string | null;
   created_at?: string;
   updated_at?: string;
   ttl_seconds: number;
+}
+
+/** Phase 3E: one executed query against a data source, for the lineage panel. */
+export interface LineageEntry {
+  ts: number;
+  sql: string;
+  source_ids: string[];
+  tables: string[];
+  row_count: number;
+  duration_ms: number;
+  ok: boolean;
+  cache_hit: boolean;
+  error?: string;
+}
+
+export interface LineageResponse {
+  data_source_id: string;
+  entries: LineageEntry[];
+  total: number;
 }

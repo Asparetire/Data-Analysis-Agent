@@ -43,7 +43,7 @@ async def test_stream_emits_one_token_event_per_chunk(monkeypatch, fake_redis):
     in order, with the same text and a positive delta."""
 
     # Stub session creation so we don't depend on real session plumbing here.
-    async def _fake_resolve(session_id, data_source_id):
+    async def _fake_resolve(session_id, data_source_id, data_source_ids=None):
         return {"session_id": session_id, "data_source_id": None, "chat_history": []}
 
     monkeypatch.setattr(streaming, "_resolve_session", _fake_resolve)
@@ -96,7 +96,7 @@ async def test_stream_end_event_carries_full_assembled_text(monkeypatch, fake_re
     the model emitted. Clients use the end event as the authoritative final
     text (e.g. when reloading history)."""
 
-    async def _fake_resolve(session_id, data_source_id):
+    async def _fake_resolve(session_id, data_source_id, data_source_ids=None):
         return {"session_id": session_id, "data_source_id": None, "chat_history": []}
 
     monkeypatch.setattr(streaming, "_resolve_session", _fake_resolve)
@@ -138,7 +138,7 @@ async def test_stream_emits_error_event_when_graph_raises(monkeypatch, fake_redi
     """If the graph task raises, the consumer must surface a single `error`
     SSE event and stop -- no `end` event should follow."""
 
-    async def _fake_resolve(session_id, data_source_id):
+    async def _fake_resolve(session_id, data_source_id, data_source_ids=None):
         return {"session_id": session_id, "data_source_id": None, "chat_history": []}
 
     monkeypatch.setattr(streaming, "_resolve_session", _fake_resolve)
@@ -165,7 +165,7 @@ async def test_stream_no_token_when_model_emits_no_text(monkeypatch, fake_redis)
     """A run that produced no streamed text should still terminate cleanly:
     no `token` events, but a single `end` event with the safety-net message."""
 
-    async def _fake_resolve(session_id, data_source_id):
+    async def _fake_resolve(session_id, data_source_id, data_source_ids=None):
         return {"session_id": session_id, "data_source_id": None, "chat_history": []}
 
     monkeypatch.setattr(streaming, "_resolve_session", _fake_resolve)

@@ -1,18 +1,34 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 from fastapi import UploadFile
+from sqlalchemy import text
 
 from ..config import settings
+from ..services import metadata_service, query_cache
 from ..utils.database import SQLITE_DIR, dispose_engine, get_engine
 from ..utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-UPLOAD_TABLE = "uploaded_data"
+# Default table name for single-sheet uploads (CSV, JSON, single-sheet Excel).
+# Multi-sheet Excel uses sanitized sheet names -- this constant is only the
+# single-table fallback.
+DEFAULT_TABLE = "uploaded_data"
 MAX_FILE_BYTES = 50 * 1024 * 1024
+
+# Indexing heuristics -- see _auto_create_indexes.
+INDEX_UNIQUE_RATIO = 0.95  # unique-value ratio above which a column gets a unique index
+INDEX_MAX_INDEXES = 5  # cap auto-indexes per table to avoid bloat
+
+# Type inference -- see infer_column_type.
+CURRENCY_PATTERN = re.compile(r"^\s*[\-\+]?[\(]?[$¥€£￥]?\s*[\d,]+(\.\d+)?[\)]?\s*[$¥€£]?\s*$")
+ISO_DATE_PATTERN = re.compile(r"^\d{4}[-/]\d{1,2}[-/]\d{1,2}")
 
 
 def _data_dir() -> Path:
@@ -27,21 +43,160 @@ def _uploads_dir() -> Path:
     return p
 
 
-def _read_dataframe(path: Path) -> pd.DataFrame:
+def _read_sheets(path: Path) -> dict[str, pd.DataFrame]:
+    """Parse a file into a {table_name: DataFrame} dict.
+
+    - CSV/JSON: a single table ``DEFAULT_TABLE``.
+    - XLSX/XLS single-sheet: a single table ``DEFAULT_TABLE`` (preserves the
+      pre-3A single-table contract).
+    - XLSX/XLS multi-sheet: one table per sheet, named by the (sanitized)
+      sheet name.
+    """
     suffix = path.suffix.lower()
     if suffix == ".csv":
-        return pd.read_csv(path)
+        return {DEFAULT_TABLE: pd.read_csv(path)}
     if suffix == ".xlsx":
-        return pd.read_excel(path, engine="openpyxl")
-    if suffix == ".xls":
-        return pd.read_excel(path, engine="xlrd")
-    if suffix == ".json":
-        return pd.read_json(path)
-    raise ValueError(f"Unsupported file type: {suffix}")
+        sheets = pd.read_excel(path, engine="openpyxl", sheet_name=None)
+    elif suffix == ".xls":
+        sheets = pd.read_excel(path, engine="xlrd", sheet_name=None)
+    elif suffix == ".json":
+        return {DEFAULT_TABLE: pd.read_json(path)}
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+    if len(sheets) == 1:
+        # Backward-compat: pre-3A code (and the LLM's prompts) assume the
+        # table is called ``uploaded_data`` for single-sheet files.
+        only_df = next(iter(sheets.values()))
+        return {DEFAULT_TABLE: only_df}
+    return _resolve_sheet_names(sheets)
+
+
+_SHEET_SANITIZE = re.compile(r"[^\w]", re.UNICODE)
+
+
+def _sanitize_sheet_name(name: str) -> str:
+    """SQLite-friendly sheet name: word chars (incl. Unicode letters) + underscore.
+
+    Stripped of whitespace, dashes, parens, etc. Non-letter-leading names
+    get a ``sheet_`` prefix so the resulting identifier is still legal.
+    """
+    cleaned = _SHEET_SANITIZE.sub("_", name.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_") or "sheet"
+    if not (cleaned[0].isalpha() or cleaned[0] == "_"):
+        cleaned = "sheet_" + cleaned
+    return cleaned[:60]
+
+
+def _resolve_sheet_names(sheets: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Rename sheets to valid SQL identifiers, deduplicating on collision."""
+    out: dict[str, pd.DataFrame] = {}
+    seen: dict[str, int] = {}
+    for raw_name, df in sheets.items():
+        name = _sanitize_sheet_name(str(raw_name))
+        if name in seen:
+            seen[name] += 1
+            name = f"{name}_{seen[name]}"
+        else:
+            seen[name] = 0
+        out[name] = df
+    return out
+
+
+def _normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Sanitize column names: strip, dedupe blanks, disambiguate collisions."""
+    seen: dict[str, int] = {}
+    new_cols = []
+    for col in df.columns:
+        name = str(col).strip() or "column"
+        if name in seen:
+            seen[name] += 1
+            new_cols.append(f"{name}_{seen[name]}")
+        else:
+            seen[name] = 0
+            new_cols.append(name)
+    df = df.copy()
+    df.columns = new_cols
+    return df
+
+
+def infer_column_type(series: pd.Series, sample_size: int = 200) -> str:
+    """Classify a pandas Series into a coarse logical type.
+
+    Returns one of: ``datetime``, ``currency``, ``boolean``, ``integer``,
+    ``number``, ``string``. ``pd.api.types.infer_dtype`` is used to
+    distinguish datetime/number, then a regex sweep over a sample catches
+    currency-shaped strings (e.g. ``"$1,234.50"``, ``"¥99"``).
+    """
+    non_null = series.dropna()
+    if non_null.empty:
+        return "string"
+    sample = non_null.head(sample_size)
+    kind = pd.api.types.infer_dtype(sample, skipna=True)
+    if kind in ("datetime64", "datetime"):
+        return "datetime"
+    if kind in ("integer",):
+        return "integer"
+    if kind in ("floating",):
+        return "number"
+    if kind in ("boolean",):
+        return "boolean"
+    if kind in ("string", "unicode", "mixed"):
+        str_values = sample.astype(str).str.strip()
+        if str_values.str.match(CURRENCY_PATTERN).all():
+            return "currency"
+    return "string"
+
+
+def _sample_values(series: pd.Series, n: int = 3) -> list:
+    """Pick a few diverse non-null values for prompt injection."""
+    non_null = series.dropna()
+    if non_null.empty:
+        return []
+    sample = non_null.head(n).tolist()
+    return [v.isoformat() if hasattr(v, "isoformat") else v for v in sample]
+
+
+def _auto_create_indexes(engine, table: str, df: pd.DataFrame) -> list[str]:
+    """Create indexes for high-cardinality and date-like columns.
+
+    Heuristic: a column gets an index if
+      - pandas classifies it as datetime, OR
+      - our ``infer_column_type`` says currency, OR
+      - its unique-value ratio is >= ``INDEX_UNIQUE_RATIO`` (typically IDs).
+
+    We cap at ``INDEX_MAX_INDEXES`` per table to avoid bloating the file.
+    """
+    indexed: list[str] = []
+    n = len(df)
+    if n == 0:
+        return indexed
+    with engine.begin() as conn:
+        for col in df.columns:
+            if len(indexed) >= INDEX_MAX_INDEXES:
+                break
+            series = df[col]
+            col_type = infer_column_type(series)
+            unique_ratio = series.nunique(dropna=True) / n
+            should_index = col_type in {"datetime", "currency"} or (
+                col_type in {"integer", "string"} and unique_ratio >= INDEX_UNIQUE_RATIO
+            )
+            if not should_index:
+                continue
+            try:
+                conn.execute(
+                    text(f'CREATE INDEX IF NOT EXISTS "idx_{table}_{col}" ON "{table}" ("{col}")')
+                )
+                indexed.append(col)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("failed to create index on %s.%s: %s", table, col, e)
+    return indexed
 
 
 async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
-    """保存上传的文件，并把内容加载到 data/sqlite/{file_id}.db 的 uploaded_data 表中。"""
+    """Save the upload, parse it (multi-sheet aware), and load into SQLite.
+
+    Returns the absolute path to the data source's SQLite file.
+    """
     filename = file.filename or ""
     suffix = Path(filename).suffix.lower()
     if suffix not in {".csv", ".xlsx", ".xls", ".json"}:
@@ -60,49 +215,102 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
             f.write(chunk)
 
     try:
-        df = _read_dataframe(upload_path)
+        sheets = _read_sheets(upload_path)
     except Exception as e:
         upload_path.unlink(missing_ok=True)
         raise ValueError(f"Failed to parse file: {e}") from e
 
-    if df.empty:
+    clean_sheets: dict[str, pd.DataFrame] = {}
+    for table_name, df in sheets.items():
+        if df is None or df.empty:
+            continue
+        clean_sheets[table_name] = _normalize_columns(df)
+
+    if not clean_sheets:
         upload_path.unlink(missing_ok=True)
         raise ValueError("File contains no rows")
 
-    # Normalize columns whose name is empty or duplicates.
-    seen: dict[str, int] = {}
-    new_cols = []
-    for col in df.columns:
-        name = str(col).strip() or "column"
-        if name in seen:
-            seen[name] += 1
-            new_cols.append(f"{name}_{seen[name]}")
-        else:
-            seen[name] = 0
-            new_cols.append(name)
-    df.columns = new_cols
-
     engine = get_engine(file_id)
-    df.to_sql(UPLOAD_TABLE, engine, if_exists="replace", index=False)
+    indexed_summary: dict[str, list[str]] = {}
+    for table_name, df in clean_sheets.items():
+        df.to_sql(table_name, engine, if_exists="replace", index=False)
+        indexed_summary[table_name] = _auto_create_indexes(engine, table_name, df)
     logger.info(
-        "Loaded %d rows x %d cols from %s into %s",
-        len(df),
-        len(df.columns),
+        "Loaded %s (%d tables: %s) into %s",
         filename,
+        len(clean_sheets),
+        ", ".join(clean_sheets.keys()),
         SQLITE_DIR / f"{file_id}.db",
     )
+
+    # Persist per-table column metadata + indexes to the sidecar so the
+    # agent's later ``list_tables`` / ``get_table_schema`` calls can show
+    # descriptions and units in the prompt.
+    try:
+        metadata_service.set_source_type(file_id, "sqlite")
+        for table_name, df in clean_sheets.items():
+            columns_meta = {
+                col: {
+                    "type": infer_column_type(df[col]),
+                    "description": "",
+                    "unit": None,
+                    "sample": _sample_values(df[col]),
+                }
+                for col in df.columns
+            }
+            metadata_service.set_table_metadata(
+                file_id,
+                table_name,
+                columns=columns_meta,
+                indexes=indexed_summary.get(table_name, []),
+                replace_columns=True,
+            )
+    except Exception as e:  # noqa: BLE001
+        # Metadata is best-effort: a failure here must not block the upload.
+        logger.warning("failed to persist column metadata for %s: %s", file_id, e)
 
     return str(SQLITE_DIR / f"{file_id}.db")
 
 
-def get_sample_rows(data_source_id: str, limit: int = 5):
-    from sqlalchemy import text
+def get_primary_table(data_source_id: str) -> str:
+    """Return the first table name for a data source.
 
+    For multi-sheet uploads this is the first sheet (preserves the old
+    single-table mental model). For single-sheet files it is
+    ``DEFAULT_TABLE``. Returns ``DEFAULT_TABLE`` when the db is empty.
+    """
+    tables = list_tables(data_source_id)
+    if not tables:
+        return DEFAULT_TABLE
+    return tables[0]
+
+
+def list_tables(data_source_id: str) -> list[str]:
+    """List all user-data table names in a data source's SQLite file.
+
+    Excludes ``sqlite_*`` system tables. Returns an empty list if the file
+    is missing or unreadable.
+    """
+    engine = get_engine(data_source_id)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table'")
+            ).fetchall()
+    except Exception:
+        return []
+    names = [r[0] for r in rows if not str(r[0]).startswith("sqlite_")]
+    return names
+
+
+def get_sample_rows(data_source_id: str, limit: int = 5, table: str | None = None):
+    """Fetch a small sample from a table; default to the primary table."""
+    target = table or get_primary_table(data_source_id)
     engine = get_engine(data_source_id)
     try:
         with engine.connect() as conn:
             result = conn.execute(
-                text(f'SELECT * FROM "{UPLOAD_TABLE}" LIMIT :n'),
+                text(f'SELECT * FROM "{target}" LIMIT :n'),
                 {"n": limit},
             )
             cols = result.keys()
@@ -111,14 +319,52 @@ def get_sample_rows(data_source_id: str, limit: int = 5):
         return None
 
 
+def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, Any] | None:
+    """Return ``{table, row_count, columns: [{name, type, ...}]}`` for a table.
+
+    ``type`` is taken from the sidecar when available (more precise --
+    distinguishes ``currency`` / ``datetime``) and falls back to
+    ``PRAGMA table_info`` otherwise.
+    """
+    target = table or get_primary_table(data_source_id)
+    engine = get_engine(data_source_id)
+    try:
+        with engine.connect() as conn:
+            rows = conn.execute(text(f'PRAGMA table_info("{target}")')).fetchall()
+            count = conn.execute(text(f'SELECT COUNT(*) FROM "{target}"')).scalar()
+    except Exception:
+        return None
+    side_meta = metadata_service.get_table_metadata(data_source_id, target) or {}
+    side_cols = side_meta.get("columns") or {}
+    columns = []
+    for r in rows:
+        name = r[1]
+        meta = side_cols.get(name) or {}
+        columns.append(
+            {
+                "name": name,
+                "type": meta.get("type") or r[2] or "string",
+                "nullable": not r[3],
+                "description": meta.get("description") or "",
+                "unit": meta.get("unit"),
+                "sample": meta.get("sample") or [],
+            }
+        )
+    return {"table": target, "row_count": count, "columns": columns}
+
+
 def delete_data_source(data_source_id: str) -> bool:
     """Remove the uploaded file, the SQLite database, and drop the cached engine.
 
-    Returns True if at least one of (uploaded file, sqlite db) existed.
-    Safe to call on a non-existent id -- it will simply report False.
+    Also invalidates any in-process query cache entries that referenced this
+    data source in their binding set, so a re-upload with the same id never
+    serves stale rows.
     """
-    # Drop the cached engine first. On Windows the engine keeps the .db file
-    # mapped, so unlinking it without disposing first raises PermissionError.
+    try:
+        query_cache.get_cache().invalidate_containing(data_source_id)
+    except Exception:  # noqa: BLE001
+        # Cache eviction is best-effort; never block deletion on it.
+        logger.warning("cache invalidation failed for %s", data_source_id, exc_info=True)
     dispose_engine(data_source_id)
 
     deleted = False

@@ -1,5 +1,11 @@
 import axios from 'axios';
-import type { ChatMessageItem, DataSource, SessionView, UploadResponse } from '../types';
+import type {
+  ChatMessageItem,
+  DataSource,
+  LineageResponse,
+  SessionView,
+  UploadResponse,
+} from '../types';
 
 // Relative base URL so the Vite dev server's /api proxy and any production
 // reverse proxy both work without changes.
@@ -59,6 +65,7 @@ export const updateSession = async (
   sessionId: string,
   updates: {
     data_source_id?: string | null;
+    data_source_ids?: string[];
     chat_history?: ChatMessageItem[];
     intermediate_results?: unknown;
     last_query?: string | null;
@@ -82,6 +89,13 @@ export const deleteDataSource = async (dataSourceId: string) => {
 export const renameDataSource = async (dataSourceId: string, displayName: string) => {
   const response = await api.patch<DataSource>(`/datasources/${dataSourceId}`, {
     display_name: displayName,
+  });
+  return response.data;
+};
+
+export const getDataSourceLineage = async (dataSourceId: string, limit = 50) => {
+  const response = await api.get<LineageResponse>(`/datasources/${dataSourceId}/lineage`, {
+    params: { limit },
   });
   return response.data;
 };
@@ -134,15 +148,18 @@ export async function* streamChat(
   sessionId: string,
   message: string,
   dataSourceId?: string,
+  dataSourceIds?: string[],
 ): AsyncGenerator<StreamEvent, void, void> {
+  const body: Record<string, unknown> = { session_id: sessionId, message };
+  if (dataSourceId) body.data_source_id = dataSourceId;
+  // Send the full list when we have one -- the server will merge/dedupe.
+  if (dataSourceIds && dataSourceIds.length > 0) {
+    body.data_source_ids = dataSourceIds;
+  }
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
-    body: JSON.stringify({
-      session_id: sessionId,
-      message,
-      data_source_id: dataSourceId,
-    }),
+    body: JSON.stringify(body),
   });
 
   if (!response.ok || !response.body) {
