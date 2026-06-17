@@ -38,6 +38,13 @@ SYSTEM_PROMPT = """你是一个专业的数据分析助手。用户会先上传 
 
 
 def _build_llm(temperature: float = 0):
+    # Phase 4E: when LLM_MOCK is on, return a deterministic stub so E2E
+    # tests can run without an OpenAI key. The stub implements the same
+    # surface the agent graph uses (``bind_tools`` + ``astream``).
+    if settings.LLM_MOCK:
+        from .mock_llm import MockChatModel
+
+        return MockChatModel()
     # Pull the key / base URL from pydantic settings (which reads .env),
     # not from os.getenv -- pydantic-loaded values never make it into
     # the process env, so ChatOpenAI would otherwise see no credentials.

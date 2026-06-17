@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     OPENAI_BASE_URL: str | None = None
+    # Phase 4E: when true, ``_build_llm`` returns ``MockChatModel`` instead of
+    # ``ChatOpenAI``. Used by Playwright E2E tests so they don't need an
+    # OpenAI key. Never set this in production -- the mock cannot answer
+    # real questions.
+    LLM_MOCK: bool = False
 
     # 主库（用于会话元数据等，data_source 业务表走独立 SQLite 文件）
     DATABASE_URL: str = "sqlite:///./data/main.db"
@@ -68,6 +73,10 @@ class Settings(BaseSettings):
 
 
 def _check_required_at_startup() -> None:
+    # In mock mode (E2E tests) the OpenAI key isn't needed; skip the warning
+    # so test logs aren't noisy.
+    if getattr(settings, "LLM_MOCK", False):
+        return
     if not os.getenv("OPENAI_API_KEY"):
         warnings.warn(
             "OPENAI_API_KEY 未设置；调用 LLM 相关接口会失败。",
