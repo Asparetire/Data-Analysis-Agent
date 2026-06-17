@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 
 from langchain_core.tools import tool
 from sqlalchemy.exc import SQLAlchemyError
 
-from ..services import data_service
+from ..services import data_service, lineage, query_cache
 from ..utils.database import _sqlite_path, get_engine
 from ..utils.logger import get_logger
 
@@ -122,6 +123,8 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
         detach = "; ".join(f"DETACH DATABASE {alias}" for alias, _ in aux)
         return attach, detach
 
+    binding_ids: list[str] = list(ids)
+
     @tool
     def query_database(sql_query: str) -> str:
         """Execute a read-only SQL query and return JSON. Max 100 rows.
@@ -129,10 +132,36 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
         For multi-source sessions, reference the primary's tables with a
         bare name and aux sources via ``ds_N.<table>``. Use ``list_tables``
         first to discover which tables are available in which source.
+
+        Results are cached in-process for 60s keyed by (sql, binding set);
+        repeated identical queries within the window skip the SQLite
+        round-trip. Every execution (cache hit or miss) is recorded in
+        per-data-source lineage for audit.
         """
         err = _is_safe_select(sql_query)
         if err:
             return json.dumps({"error": err}, ensure_ascii=False)
+        cache = query_cache.get_cache()
+        cache_key = query_cache.QueryCache.make_key(sql_query, binding_ids)
+        t_start = time.perf_counter()
+        cached = cache.get(cache_key)
+        if cached is not None:
+            elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+            lineage.record_query(
+                source_ids=binding_ids,
+                sql=sql_query,
+                ok=True,
+                row_count=cached.get("row_count", 0),
+                duration_ms=elapsed_ms,
+                cache_hit=True,
+            )
+            payload = {
+                "row_count": cached.get("row_count", 0),
+                "columns": cached.get("columns", []),
+                "rows": cached.get("rows", []),
+                "cache_hit": True,
+            }
+            return json.dumps(payload, ensure_ascii=False)
         try:
             limited = _wrap_with_limit(sql_query, _MAX_ROWS)
             attach, detach = _attach_sql()
@@ -162,13 +191,50 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 dict(zip(cols, [str(c) if c is not None else None for c in row], strict=False))
                 for row in rows
             ]
+            cache.set_with_bindings(
+                cache_key,
+                {"columns": cols, "rows": data, "row_count": len(data)},
+                binding_ids,
+            )
+            elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+            lineage.record_query(
+                source_ids=binding_ids,
+                sql=sql_query,
+                ok=True,
+                row_count=len(data),
+                duration_ms=elapsed_ms,
+                cache_hit=False,
+            )
             return json.dumps(
-                {"row_count": len(data), "columns": cols, "rows": data},
+                {
+                    "row_count": len(data),
+                    "columns": cols,
+                    "rows": data,
+                    "cache_hit": False,
+                },
                 ensure_ascii=False,
             )
         except SQLAlchemyError as e:
+            elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+            lineage.record_query(
+                source_ids=binding_ids,
+                sql=sql_query,
+                ok=False,
+                duration_ms=elapsed_ms,
+                cache_hit=False,
+                error=str(e),
+            )
             return json.dumps({"error": f"SQL error: {e}"}, ensure_ascii=False)
         except Exception as e:
+            elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+            lineage.record_query(
+                source_ids=binding_ids,
+                sql=sql_query,
+                ok=False,
+                duration_ms=elapsed_ms,
+                cache_hit=False,
+                error=str(e),
+            )
             logger.exception("query_database failed")
             return json.dumps({"error": str(e)}, ensure_ascii=False)
 

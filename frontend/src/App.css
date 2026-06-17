@@ -609,3 +609,140 @@ button {
   border-color: rgba(37, 99, 235, 0.3);
   background: var(--color-pill-active-bg);
 }
+
+/* Phase 3E: query lineage panel */
+.lineage-modal {
+  min-width: 540px;
+  max-width: 720px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 20px;
+}
+.lineage-subtitle {
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+.lineage-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 0;
+}
+.lineage-empty {
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 24px 0;
+}
+.lineage-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.lineage-row {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: var(--color-bg);
+}
+.lineage-row.failed {
+  border-color: var(--color-danger-border);
+  background: var(--color-danger-soft);
+}
+.lineage-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.lineage-row-head .ok-icon {
+  color: var(--color-success);
+}
+.lineage-row-head .fail-icon {
+  color: var(--color-danger);
+}
+.lineage-time {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.lineage-stats {
+  margin-left: auto;
+}
+.lineage-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.lineage-badge.hit {
+  background: var(--color-pill-active-bg);
+  color: var(--color-pill-active-fg);
+}
+.lineage-badge.fail {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.lineage-sql {
+  margin: 0;
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  background: var(--color-code-bg);
+  color: var(--color-code-fg);
+  padding: 6px 8px;
+  border-radius: 4px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.lineage-tables {
+  font-size: 10px;
+  color: var(--color-text-muted);
+  margin-top: 4px;
+  font-style: italic;
+}
+.lineage-row-error {
+  font-size: 11px;
+  color: var(--color-danger);
+  margin-top: 4px;
+  font-family: 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+.lineage-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 8px;
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+}
+.lineage-total {
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.spin {
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

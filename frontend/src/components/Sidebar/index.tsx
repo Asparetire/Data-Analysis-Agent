@@ -9,10 +9,12 @@ import {
   X,
   Check,
   AlertTriangle,
+  History,
 } from 'lucide-react';
 import { useChatStore } from '../../store/chatStore';
 import { getDataSources, renameDataSource } from '../../services/api';
 import { useT } from '../../hooks/useUi';
+import LineagePanel from '../LineagePanel';
 
 const TYPE_LABEL: Record<string, string> = {
   csv: 'CSV',
@@ -53,6 +55,7 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [pendingSwitch, setPendingSwitch] = useState<SwitchPrompt | null>(null);
+  const [lineageFor, setLineageFor] = useState<{ id: string; name: string } | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -281,6 +284,14 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
                       >
                         <Pencil size={11} />
                       </button>
+                      <button
+                        type="button"
+                        className="ds-row-action"
+                        onClick={() => setLineageFor({ id: ds.id, name: ds.name })}
+                        title={t('lineage.open')}
+                      >
+                        <History size={11} />
+                      </button>
                       <DeleteButton id={ds.id} name={ds.name} />
                     </>
                   )}
@@ -315,6 +326,14 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {lineageFor ? (
+        <LineagePanel
+          dataSourceId={lineageFor.id}
+          dataSourceName={lineageFor.name}
+          onClose={() => setLineageFor(null)}
+        />
       ) : null}
     </aside>
   );

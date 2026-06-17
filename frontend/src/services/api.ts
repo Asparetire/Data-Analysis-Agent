@@ -1,5 +1,11 @@
 import axios from 'axios';
-import type { ChatMessageItem, DataSource, SessionView, UploadResponse } from '../types';
+import type {
+  ChatMessageItem,
+  DataSource,
+  LineageResponse,
+  SessionView,
+  UploadResponse,
+} from '../types';
 
 // Relative base URL so the Vite dev server's /api proxy and any production
 // reverse proxy both work without changes.
@@ -83,6 +89,13 @@ export const deleteDataSource = async (dataSourceId: string) => {
 export const renameDataSource = async (dataSourceId: string, displayName: string) => {
   const response = await api.patch<DataSource>(`/datasources/${dataSourceId}`, {
     display_name: displayName,
+  });
+  return response.data;
+};
+
+export const getDataSourceLineage = async (dataSourceId: string, limit = 50) => {
+  const response = await api.get<LineageResponse>(`/datasources/${dataSourceId}/lineage`, {
+    params: { limit },
   });
   return response.data;
 };

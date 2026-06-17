@@ -14,6 +14,8 @@ from ..models.schemas import (
     ChatResponse,
     DataSource,
     DataSourceRename,
+    LineageEntry,
+    LineageResponse,
     SessionCreateResponse,
     SessionUpdate,
     SessionView,
@@ -193,6 +195,26 @@ async def schema_datasource(data_source_id: str):
     sample = rows[0]
     schema = [{"name": k, "type": _infer_type(v)} for k, v in sample.items()]
     return {"schema": schema}
+
+
+@router.get("/datasources/{data_source_id}/lineage", response_model=LineageResponse)
+async def lineage_datasource(data_source_id: str, limit: int = 50):
+    """Return the most-recent query lineage records for a data source.
+
+    ``limit`` is capped at 200 to keep the response small. Records are
+    returned newest-first; ``total`` reflects the untruncated count so
+    the UI can decide whether to offer a "show more" affordance.
+    """
+    cap = max(1, min(int(limit), 200))
+    raw = metadata_service.get_lineage(data_source_id, limit=cap)
+    # Full count for the UI: the on-disk cap is 200 (see metadata_service).
+    full = metadata_service.get_lineage(data_source_id, limit=None)
+    entries = [LineageEntry(**r) for r in raw if isinstance(r, dict)]
+    return LineageResponse(
+        data_source_id=data_source_id,
+        entries=entries,
+        total=len(full),
+    )
 
 
 @router.delete("/datasources/{data_source_id}")

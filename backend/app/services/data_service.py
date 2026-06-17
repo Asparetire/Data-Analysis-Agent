@@ -10,7 +10,7 @@ from fastapi import UploadFile
 from sqlalchemy import text
 
 from ..config import settings
-from ..services import metadata_service
+from ..services import metadata_service, query_cache
 from ..utils.database import SQLITE_DIR, dispose_engine, get_engine
 from ..utils.logger import get_logger
 
@@ -356,7 +356,17 @@ def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, A
 
 
 def delete_data_source(data_source_id: str) -> bool:
-    """Remove the uploaded file, the SQLite database, and drop the cached engine."""
+    """Remove the uploaded file, the SQLite database, and drop the cached engine.
+
+    Also invalidates any in-process query cache entries that referenced this
+    data source in their binding set, so a re-upload with the same id never
+    serves stale rows.
+    """
+    try:
+        query_cache.get_cache().invalidate_containing(data_source_id)
+    except Exception:  # noqa: BLE001
+        # Cache eviction is best-effort; never block deletion on it.
+        logger.warning("cache invalidation failed for %s", data_source_id, exc_info=True)
     dispose_engine(data_source_id)
 
     deleted = False

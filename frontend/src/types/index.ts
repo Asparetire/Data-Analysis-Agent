@@ -57,3 +57,22 @@ export interface SessionView {
   updated_at?: string;
   ttl_seconds: number;
 }
+
+/** Phase 3E: one executed query against a data source, for the lineage panel. */
+export interface LineageEntry {
+  ts: number;
+  sql: string;
+  source_ids: string[];
+  tables: string[];
+  row_count: number;
+  duration_ms: number;
+  ok: boolean;
+  cache_hit: boolean;
+  error?: string;
+}
+
+export interface LineageResponse {
+  data_source_id: string;
+  entries: LineageEntry[];
+  total: number;
+}
