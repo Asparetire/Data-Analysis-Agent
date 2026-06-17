@@ -13,6 +13,7 @@ from ..config import settings
 from ..services import metadata_service, query_cache
 from ..utils.database import SQLITE_DIR, dispose_engine, get_engine
 from ..utils.logger import get_logger
+from ..utils.pii_mask import mask_dataframe, mask_value
 
 logger = get_logger(__name__)
 
@@ -224,7 +225,11 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
     for table_name, df in sheets.items():
         if df is None or df.empty:
             continue
-        clean_sheets[table_name] = _normalize_columns(df)
+        normalized = _normalize_columns(df)
+        # Phase 4C layer 1: scrub PII before it hits SQLite. The raw value
+        # never lands on disk; downstream queries see the mask. This is a
+        # one-way transform — the original cannot be recovered.
+        clean_sheets[table_name] = mask_dataframe(normalized)
 
     if not clean_sheets:
         upload_path.unlink(missing_ok=True)
@@ -245,7 +250,9 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
 
     # Persist per-table column metadata + indexes to the sidecar so the
     # agent's later ``list_tables`` / ``get_table_schema`` calls can show
-    # descriptions and units in the prompt.
+    # descriptions and units in the prompt. Samples are masked too so the
+    # LLM prompt (layer 4) never carries raw PII even if the column wasn't
+    # caught by the upload scrub.
     try:
         metadata_service.set_source_type(file_id, "sqlite")
         for table_name, df in clean_sheets.items():
@@ -254,7 +261,7 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
                     "type": infer_column_type(df[col]),
                     "description": "",
                     "unit": None,
-                    "sample": _sample_values(df[col]),
+                    "sample": [mask_value(v) for v in _sample_values(df[col])],
                 }
                 for col in df.columns
             }
