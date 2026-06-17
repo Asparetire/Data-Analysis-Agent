@@ -52,6 +52,14 @@ def _build_llm(temperature: float = 0):
         "model": settings.OPENAI_MODEL,
         "temperature": temperature,
         "streaming": True,
+        # Reasoning models (e.g. minimax-m3 on Ark) emit a long chain of
+        # thinking tokens before any visible content. Without an explicit
+        # cap, the server's default max_tokens can be small enough that the
+        # reasoning phase eats the whole budget and content stays empty —
+        # which surfaces to the user as "(empty response)". 4k is enough
+        # headroom for our schema-driven SQL agent while staying well under
+        # any per-call quota.
+        "max_tokens": 4096,
     }
     if settings.OPENAI_API_KEY:
         kwargs["api_key"] = settings.OPENAI_API_KEY
