@@ -45,6 +45,14 @@ def _build_llm(temperature: float = 0):
         from .mock_llm import MockChatModel
 
         return MockChatModel()
+
+    provider = (settings.LLM_PROVIDER or "openai").lower()
+    if provider == "anthropic":
+        return _build_anthropic_llm(temperature)
+    return _build_openai_llm(temperature)
+
+
+def _build_openai_llm(temperature: float) -> ChatOpenAI:
     # Pull the key / base URL from pydantic settings (which reads .env),
     # not from os.getenv -- pydantic-loaded values never make it into
     # the process env, so ChatOpenAI would otherwise see no credentials.
@@ -66,6 +74,25 @@ def _build_llm(temperature: float = 0):
     if settings.OPENAI_BASE_URL:
         kwargs["base_url"] = settings.OPENAI_BASE_URL
     return ChatOpenAI(**kwargs)
+
+
+def _build_anthropic_llm(temperature: float):
+    # Lazy import so the anthropic SDK is only required when actually
+    # selected — installations that don't use Anthropic can skip
+    # ``langchain-anthropic`` entirely.
+    from langchain_anthropic import ChatAnthropic
+
+    kwargs: dict[str, Any] = {
+        "model": settings.ANTHROPIC_MODEL,
+        "temperature": temperature,
+        "streaming": True,
+        "max_tokens": 4096,
+    }
+    if settings.ANTHROPIC_API_KEY:
+        kwargs["api_key"] = settings.ANTHROPIC_API_KEY
+    if settings.ANTHROPIC_BASE_URL:
+        kwargs["base_url"] = settings.ANTHROPIC_BASE_URL
+    return ChatAnthropic(**kwargs)
 
 
 TokenCallback = Callable[[str], None]

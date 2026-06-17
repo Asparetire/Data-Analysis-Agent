@@ -21,9 +21,25 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Data Analysis Agent"
 
     # LLM
+    # ``LLM_PROVIDER`` picks the chat-model backend: ``"openai"`` (default,
+    # OpenAI-compatible: Ark v3 endpoint, OpenAI itself, etc.) or
+    # ``"anthropic"`` (Anthropic-compatible: Claude, Ark coding endpoint
+    # at /api/coding without the /v3 suffix). Switching is env-only —
+    # change the value and restart the backend; there's no runtime swap.
+    LLM_PROVIDER: str = "openai"
+
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     OPENAI_BASE_URL: str | None = None
+
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
+    # Anthropic-compatible base URL. The official API is
+    # https://api.anthropic.com; Ark's coding endpoint is
+    # https://ark.cn-beijing.volces.com/api/coding. Leave None for the
+    # official API.
+    ANTHROPIC_BASE_URL: str | None = None
+
     # Phase 4E: when true, ``_build_llm`` returns ``MockChatModel`` instead of
     # ``ChatOpenAI``. Used by Playwright E2E tests so they don't need an
     # OpenAI key. Never set this in production -- the mock cannot answer
