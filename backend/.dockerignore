@@ -1,0 +1,19 @@
+# Tests + dev artifacts don't belong in the production image.
+tests/
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+.env
+.env.*
+!.env.example
+data/
+.e2e-data/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+htmlcov/
+.coverage
+.coverage.*
+git/
+.gitignore
+.gitattributes

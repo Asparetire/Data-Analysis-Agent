@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.vite/
+e2e/.e2e-data/
+playwright-report/
+test-results/
+.env
+.env.*
+!.env.example

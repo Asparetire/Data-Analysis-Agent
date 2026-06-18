@@ -60,7 +60,7 @@ export default defineConfig({
         DATABASE_URL: `sqlite:///../frontend/${SCRATCH_DIR}/main.db`,
         // DB 15 is reserved for E2E so we don't collide with dev sessions.
         REDIS_URL: 'redis://localhost:6379/15',
-        JWT_SECRET: 'e2e-secret',
+        JWT_SECRET: 'e2e-secret-32-bytes-long-aaaaaaaaaaaa',
       },
     },
     {

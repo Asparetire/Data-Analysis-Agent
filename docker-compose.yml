@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   backend:
     build:
@@ -8,15 +6,36 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=gpt-4o
+      # LLM provider — switch with LLM_PROVIDER=anthropic to use Claude.
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      # Phase 4A: auth — JWT_SECRET must be ≥32 bytes, override in .env.
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required (≥32 bytes)}
+      - ACCESS_TOKEN_TTL_MINUTES=${ACCESS_TOKEN_TTL_MINUTES:-15}
+      - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-7}
+      - MIGRATION_ADMIN_EMAIL=${MIGRATION_ADMIN_EMAIL:-admin@local.invalid}
+      - MIGRATION_ADMIN_PASSWORD=${MIGRATION_ADMIN_PASSWORD:?MIGRATION_ADMIN_PASSWORD is required}
+      # Phase 4B: rate limits
+      - RATE_LIMIT_PER_USER_PER_MINUTE=${RATE_LIMIT_PER_USER_PER_MINUTE:-60}
+      - RATE_LIMIT_PER_IP_PER_MINUTE=${RATE_LIMIT_PER_IP_PER_MINUTE:-20}
+      # Infra
       - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - DATA_DIR=/app/data
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:5173"]}
     volumes:
-      - ./backend/app/data:/app/app/data
+      # Container CWD is /app, so DATA_DIR=/app/data lands here. The previous
+      # mapping to /app/app/data never matched and data was lost on restart.
+      - backend_data:/app/data
     depends_on:
       - redis
 
-  # 前端是纯静态/浏览器侧 SPA，LLM 调用走 backend，因此无需注入 OPENAI_API_KEY。
+  # 前端是纯静态/浏览器侧 SPA，LLM 调用走 backend，因此无需注入 API key。
   # 若后续在前端直接调用 LLM SDK，请用 VITE_OPENAI_API_KEY 并从 .env 注入。
   frontend:
     build:
@@ -24,6 +43,9 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
+    environment:
+      # Vite dev-server proxy target inside the compose network.
+      - VITE_API_PROXY_TARGET=http://backend:8000
     depends_on:
       - backend
 
@@ -35,4 +57,5 @@ services:
       - redis_data:/data
 
 volumes:
+  backend_data:
   redis_data:

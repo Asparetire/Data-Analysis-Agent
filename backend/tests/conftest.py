@@ -4,13 +4,20 @@ Goals:
 - Tests never touch the real Redis (fakeredis substitute).
 - Tests never touch the real upload / sqlite directories (tmp_path override).
 - Each test gets a fresh fakeredis instance so state never leaks across tests.
+- JWT_SECRET is set to a test-only value before app.config is imported, so
+  the startup validator doesn't abort collection.
 """
 
 from __future__ import annotations
 
 import io
+import os
 from collections.abc import AsyncIterator
 from typing import Any
+
+# Must run before `app.config` is imported anywhere. pytest loads conftest
+# first, so setting it at module top does the job.
+os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-32-bytes-long-aaaa")
 
 import fakeredis.aioredis
 import pytest
@@ -71,6 +78,26 @@ def tmp_data_dir(monkeypatch, tmp_path):
     for engine in list(database._engines.values()):  # noqa: SLF001
         engine.dispose()
     database._engines.clear()  # noqa: SLF001
+
+
+@pytest.fixture
+def users_db(tmp_data_dir, monkeypatch):
+    """Point main.db at a temp file and (re)create the users table.
+
+    The default ``DATABASE_URL`` lands in ``backend/data/main.db`` which is
+    shared across tests; without this fixture, registered users leak between
+    tests and the second ``register(alice@example.com, ...)`` 409s.
+    """
+    from app.config import settings
+    from app.services import auth_service
+    from app.utils import database
+
+    main_path = tmp_data_dir / "main.db"
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{main_path}")
+    database.dispose_engine(None)
+    auth_service.init_users_table()
+    yield
+    database.dispose_engine(None)
 
 
 @pytest.fixture
