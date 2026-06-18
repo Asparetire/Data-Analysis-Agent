@@ -35,6 +35,7 @@ COPY --from=builder /install /usr/local
 
 # Copy only the app source — .dockerignore keeps tests/.env/data/ out.
 COPY app/ ./app/
+COPY scripts/ ./scripts/
 
 # DATA_DIR is /app/data — created at runtime by the volume mount, but
 # ensure it exists for non-volume local runs.

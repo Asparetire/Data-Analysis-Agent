@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sse_starlette.sse import EventSourceResponse
+from starlette.responses import JSONResponse
 
 from ..config import settings
 from ..models.schemas import (
@@ -29,6 +31,22 @@ from .dependencies import current_user
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+# Phase 5C: process start time for /health/ready. Captured at module import
+# (≈ process start) so uptime_seconds reflects the real lifetime.
+_started_at = time.monotonic()
+
+
+def _get_app_version() -> str:
+    """Read the FastAPI app version, deferring the import to avoid a
+    circular load (main.py imports routes.py, so we can't import main at
+    module top here)."""
+    try:
+        from ..main import app as _app
+
+        return _app.version
+    except Exception:  # noqa: BLE001
+        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -470,11 +488,55 @@ async def delete_session(session_id: str, user: dict = Depends(current_user)):
     return None
 
 
+@router.get("/health/live")
+async def health_live():
+    """Liveness — process is up and the event loop is turning.
+
+    No dependency checks. Use this for K8s liveness probes / load balancer
+    health: if the process can't answer this, the orchestrator should
+    restart it.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/health/ready")
+async def health_ready():
+    """Readiness — process can serve real traffic (Redis + main DB reachable).
+
+    Returns 503 if any dependency is down so the load balancer pulls this
+    instance out of rotation without restarting it. K8s readiness probe.
+    """
+    from sqlalchemy import text
+
+    from ..utils.database import get_engine
+
+    redis_ok = await session_service.ping()
+    db_ok = True
+    try:
+        engine = get_engine(None)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        db_ok = False
+
+    ok = redis_ok and db_ok
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={
+            "status": "ok" if ok else "degraded",
+            "redis": redis_ok,
+            "db": db_ok,
+            "version": _get_app_version(),
+            "uptime_seconds": round(time.monotonic() - _started_at, 3),
+        },
+    )
+
+
 @router.get("/health")
 async def health_check():
-    """Health check stays public — load balancers and uptime monitors need it."""
-    redis_ok = await session_service.ping()
-    return {
-        "status": "ok" if redis_ok else "degraded",
-        "redis": redis_ok,
-    }
+    """Backward-compat alias for /health/ready.
+
+    Pre-Phase 5 monitors hit /health; keep it working. The body matches
+    /health/ready so callers don't need to change their parser.
+    """
+    return await health_ready()

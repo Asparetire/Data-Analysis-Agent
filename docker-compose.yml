@@ -74,6 +74,36 @@ services:
     volumes:
       - minio_data:/data
 
+  # One-shot backup runner. Triggered manually:
+  #   docker compose run --rm backup
+  # Scheduling (cron / K8s CronJob / systemd timer) lives outside compose.
+  # Reuses the backend image so the script has the same deps (boto3, redis,
+  # sqlalchemy) as the app — no separate image to maintain.
+  backup:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python scripts/backup.py
+    environment:
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      - MINIO_BUCKET=${MINIO_BUCKET:-data-analysis-backups}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - backend_data:/app/data
+      # Read-only access to redis dump.rdb so backup.py can copy it.
+      - redis_data:/data:ro
+    depends_on:
+      - backend
+      - redis
+      - minio
+    profiles:
+      # Don't start on `docker compose up` — only on explicit `--profile backup`.
+      - backup
+
 volumes:
   backend_data:
   redis_data:
