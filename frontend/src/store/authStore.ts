@@ -3,6 +3,7 @@ import type { TokenResponse, UserView } from '../types';
 import {
   getCurrentUser as apiGetMe,
   login as apiLogin,
+  logout as apiLogout,
   refresh as apiRefresh,
   register as apiRegister,
 } from '../services/api';
@@ -48,7 +49,10 @@ interface AuthState {
   bootstrap: () => Promise<void>;
   register: (email: string, password: string) => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  logout: () => void;
+  /** Revoke the refresh token server-side, then clear local state.
+   * Best-effort: local state is cleared even if the network call fails,
+   * so a flaky connection can't strand the user in an authed UI. */
+  logout: () => Promise<void>;
   /** Called by the axios interceptor when a 401 is observed on a request. */
   clearIfInvalid: () => void;
   /** Force a refresh-token rotation; returns the new access token or null. */
@@ -125,7 +129,20 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
-  logout: () => {
+  logout: async () => {
+    // Phase 4A: revoke the refresh token server-side so its jti leaves Redis
+    // immediately. Without this the jti lingers until natural expiry (default
+    // 7 days), and a stolen token stays usable for that whole window.
+    // Best-effort: clear local state regardless of network outcome so a flaky
+    // connection can't strand the user in an authed UI.
+    const refreshToken = get().refreshToken;
+    if (refreshToken) {
+      try {
+        await apiLogout(refreshToken);
+      } catch {
+        /* network error / already revoked — proceed to clear local state */
+      }
+    }
     writeTokens(null, null);
     set({ user: null, accessToken: null, refreshToken: null, status: 'guest', error: null });
   },

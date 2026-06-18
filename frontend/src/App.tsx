@@ -152,7 +152,9 @@ export default function App() {
           <button
             type="button"
             className="icon-btn"
-            onClick={logout}
+            onClick={() => {
+              void logout();
+            }}
             title="退出登录"
             aria-label="退出登录"
           >
