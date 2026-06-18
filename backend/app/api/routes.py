@@ -54,7 +54,7 @@ def _get_app_version() -> str:
 # ---------------------------------------------------------------------------
 
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post("/upload", response_model=UploadResponse, tags=["datasources"])
 async def upload_file(
     file: UploadFile = File(...),
     user: dict = Depends(current_user),
@@ -87,7 +87,7 @@ async def upload_file(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, tags=["chat"])
 async def chat_endpoint(request: ChatRequest, user: dict = Depends(current_user)):
     try:
         return await chat_service.run_chat(
@@ -108,7 +108,7 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(current_user)
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}") from e
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", tags=["chat"])
 async def chat_stream_endpoint(request: ChatRequest, user: dict = Depends(current_user)):
     """SSE endpoint for a single chat turn.
 
@@ -175,7 +175,7 @@ def _check_datasource_owner(data_source_id: str, user: dict) -> None:
         raise HTTPException(status_code=404, detail="Data source not found")
 
 
-@router.get("/datasources", response_model=list[DataSource])
+@router.get("/datasources", response_model=list[DataSource], tags=["datasources"])
 async def get_datasources(user: dict = Depends(current_user)):
     """List only the data sources owned by the current user."""
     uploads_dir = Path(settings.DATA_DIR) / "uploads"
@@ -205,7 +205,7 @@ async def get_datasources(user: dict = Depends(current_user)):
     return items
 
 
-@router.patch("/datasources/{data_source_id}", response_model=DataSource)
+@router.patch("/datasources/{data_source_id}", response_model=DataSource, tags=["datasources"])
 async def rename_datasource(
     data_source_id: str,
     body: DataSourceRename,
@@ -241,7 +241,7 @@ async def rename_datasource(
     )
 
 
-@router.get("/datasources/{data_source_id}/preview")
+@router.get("/datasources/{data_source_id}/preview", tags=["datasources"])
 async def preview_datasource(
     data_source_id: str,
     limit: int = 5,
@@ -256,7 +256,7 @@ async def preview_datasource(
     return {"rows": rows, "count": len(rows)}
 
 
-@router.get("/datasources/{data_source_id}/schema")
+@router.get("/datasources/{data_source_id}/schema", tags=["datasources"])
 async def schema_datasource(
     data_source_id: str,
     table: str | None = None,
@@ -273,7 +273,7 @@ async def schema_datasource(
     return {"schema": schema}
 
 
-@router.get("/datasources/{data_source_id}/rows")
+@router.get("/datasources/{data_source_id}/rows", tags=["datasources"])
 async def rows_datasource(
     data_source_id: str,
     table: str | None = None,
@@ -314,7 +314,7 @@ async def rows_datasource(
     return payload
 
 
-@router.get("/datasources/{data_source_id}/tables")
+@router.get("/datasources/{data_source_id}/tables", tags=["datasources"])
 async def tables_datasource(
     data_source_id: str,
     user: dict = Depends(current_user),
@@ -334,7 +334,9 @@ async def tables_datasource(
     return {"tables": out}
 
 
-@router.get("/datasources/{data_source_id}/lineage", response_model=LineageResponse)
+@router.get(
+    "/datasources/{data_source_id}/lineage", response_model=LineageResponse, tags=["datasources"]
+)
 async def lineage_datasource(
     data_source_id: str,
     limit: int = 50,
@@ -357,7 +359,7 @@ async def lineage_datasource(
     )
 
 
-@router.delete("/datasources/{data_source_id}")
+@router.delete("/datasources/{data_source_id}", tags=["datasources"])
 async def delete_datasource(
     data_source_id: str,
     user: dict = Depends(current_user),
@@ -409,7 +411,7 @@ def _check_session_owner(session: dict, user: dict) -> None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
 
-@router.get("/sessions/{session_id}", response_model=SessionView)
+@router.get("/sessions/{session_id}", response_model=SessionView, tags=["sessions"])
 async def get_session(session_id: str, user: dict = Depends(current_user)):
     session = await session_service.get_session(session_id)
     if session is None:
@@ -429,7 +431,7 @@ async def get_session(session_id: str, user: dict = Depends(current_user)):
     )
 
 
-@router.post("/sessions", response_model=SessionCreateResponse, status_code=201)
+@router.post("/sessions", response_model=SessionCreateResponse, status_code=201, tags=["sessions"])
 async def create_session(user: dict = Depends(current_user)):
     session_id = await session_service.create_session(owner_id=user["id"])
     session = await session_service.get_session(session_id)
@@ -447,7 +449,7 @@ async def create_session(user: dict = Depends(current_user)):
     )
 
 
-@router.patch("/sessions/{session_id}", response_model=SessionView)
+@router.patch("/sessions/{session_id}", response_model=SessionView, tags=["sessions"])
 async def update_session(
     session_id: str,
     body: SessionUpdate,
@@ -476,7 +478,7 @@ async def update_session(
     )
 
 
-@router.delete("/sessions/{session_id}", status_code=204)
+@router.delete("/sessions/{session_id}", status_code=204, tags=["sessions"])
 async def delete_session(session_id: str, user: dict = Depends(current_user)):
     session = await session_service.get_session(session_id)
     if session is None:
@@ -488,7 +490,7 @@ async def delete_session(session_id: str, user: dict = Depends(current_user)):
     return None
 
 
-@router.get("/health/live")
+@router.get("/health/live", tags=["system"])
 async def health_live():
     """Liveness — process is up and the event loop is turning.
 
@@ -499,7 +501,7 @@ async def health_live():
     return {"status": "alive"}
 
 
-@router.get("/health/ready")
+@router.get("/health/ready", tags=["system"])
 async def health_ready():
     """Readiness — process can serve real traffic (Redis + main DB reachable).
 
@@ -532,7 +534,7 @@ async def health_ready():
     )
 
 
-@router.get("/health")
+@router.get("/health", tags=["system"])
 async def health_check():
     """Backward-compat alias for /health/ready.
 

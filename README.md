@@ -82,6 +82,16 @@ npm run e2e
 
 E2E 跑前需先启 Redis；CI 会作为 service container 自动拉起。
 
+### 5. 文档站（MkDocs Material）
+
+```bash
+pip install -r backend/requirements-dev.txt  # 装 mkdocs + mkdocs-material
+cd docs
+mkdocs serve  # http://localhost:8001
+```
+
+文档源在 `docs/docs/*.md`，配置在 `docs/mkdocs.yml`。Swagger 交互式 API 文档在运行时访问 `/api/v1/docs`。
+
 ## 会话管理
 
 后端用 Redis 保存会话，键 `session:{session_id}`，TTL 30 分钟，任何写操作都会重置 TTL。

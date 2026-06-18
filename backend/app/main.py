@@ -11,10 +11,25 @@ from .utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Phase 5D: tag metadata for OpenAPI grouping in Swagger UI. Routes that
+# don't set `tags=` default to their module name; setting tags here lets
+# /docs show a clean grouped layout instead of a flat list.
+_TAGS_METADATA = [
+    {"name": "auth", "description": "注册、登录、refresh、logout、me"},
+    {
+        "name": "datasources",
+        "description": "上传、列出、重命名、删除、预览、schema、分页、表浏览、lineage",
+    },
+    {"name": "sessions", "description": "会话 CRUD"},
+    {"name": "chat", "description": "同步 / SSE 流式对话"},
+    {"name": "system", "description": "health、metrics"},
+]
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="0.1.0",
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    openapi_tags=_TAGS_METADATA,
 )
 
 # CORS 中间件
