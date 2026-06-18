@@ -36,15 +36,17 @@ app.include_router(auth_router, prefix=settings.API_V1_STR)
 async def _startup() -> None:
     """Build the users table and migrate any ownerless data to a default admin.
 
-    Runs synchronously — SQLite DDL is fast, and migrating the sidecar is a
-    handful of file writes. Failures are logged but never fatal: the app
-    still starts, /auth/* will surface the missing table as 500s instead.
+    Failures here are FATAL: if the users table can't be created, every
+    /auth/* call will 500 and the app is useless. Previously we swallowed
+    the exception (logged + kept running) which masked the root cause —
+    e.g. Phase 4E CI hung for a full run before anyone noticed /auth/*
+    was broken because the main DB directory didn't exist. Letting the
+    process die lets the orchestrator (Docker / systemd / uvicorn
+    supervisor) restart it and surface the failure immediately.
     """
-    try:
-        auth_service.init_users_table()
-        auth_service.migrate_ownerless_data()
-    except Exception:  # noqa: BLE001
-        logger.exception("startup auth init failed; /auth/* will be broken")
+    auth_service.init_users_table()
+    auth_service.migrate_ownerless_data()
+    logger.info("auth tables initialized; migration complete")
 
 
 @app.get("/")
