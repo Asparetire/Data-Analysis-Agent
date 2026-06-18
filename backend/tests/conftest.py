@@ -81,6 +81,26 @@ def tmp_data_dir(monkeypatch, tmp_path):
 
 
 @pytest.fixture
+def users_db(tmp_data_dir, monkeypatch):
+    """Point main.db at a temp file and (re)create the users table.
+
+    The default ``DATABASE_URL`` lands in ``backend/data/main.db`` which is
+    shared across tests; without this fixture, registered users leak between
+    tests and the second ``register(alice@example.com, ...)`` 409s.
+    """
+    from app.config import settings
+    from app.services import auth_service
+    from app.utils import database
+
+    main_path = tmp_data_dir / "main.db"
+    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{main_path}")
+    database.dispose_engine(None)
+    auth_service.init_users_table()
+    yield
+    database.dispose_engine(None)
+
+
+@pytest.fixture
 def make_upload():
     """Return a factory that builds a _FakeUploadFile from a filename + bytes."""
     return _FakeUploadFile

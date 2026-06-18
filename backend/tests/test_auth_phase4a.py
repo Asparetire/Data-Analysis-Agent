@@ -13,21 +13,6 @@ import pytest
 from app.services import auth_service, metadata_service
 
 
-@pytest.fixture
-def users_db(tmp_data_dir, monkeypatch):
-    """Point main.db at a temp file and create the users table."""
-    from app.config import settings
-    from app.utils import database
-
-    main_path = tmp_data_dir / "main.db"
-    monkeypatch.setattr(settings, "DATABASE_URL", f"sqlite:///{main_path}")
-    # Drop the cached default engine so the new DATABASE_URL takes effect.
-    database.dispose_engine(None)
-    auth_service.init_users_table()
-    yield
-    database.dispose_engine(None)
-
-
 def test_register_creates_user_and_hashes_password(users_db):
     user = auth_service.register("alice@example.com", "topsecret123")
     assert user["email"] == "alice@example.com"
