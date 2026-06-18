@@ -63,9 +63,9 @@ def test_authenticate_is_case_insensitive_on_email(users_db):
     assert user["email"] == "dave@example.com"
 
 
-def test_issue_and_verify_access_token(users_db):
+async def test_issue_and_verify_access_token(users_db, fake_redis):
     user = auth_service.register("erin@example.com", "topsecret123")
-    tokens = auth_service.issue_tokens(user)
+    tokens = await auth_service.issue_tokens(user)
     assert tokens["access_token"]
     assert tokens["refresh_token"]
     payload = auth_service.verify_access_token(tokens["access_token"])
@@ -73,9 +73,9 @@ def test_issue_and_verify_access_token(users_db):
     assert payload["type"] == "access"
 
 
-def test_verify_access_token_rejects_refresh_token(users_db):
+async def test_verify_access_token_rejects_refresh_token(users_db, fake_redis):
     user = auth_service.register("frank@example.com", "topsecret123")
-    tokens = auth_service.issue_tokens(user)
+    tokens = await auth_service.issue_tokens(user)
     with pytest.raises(auth_service.InvalidToken):
         auth_service.verify_access_token(tokens["refresh_token"])
 
@@ -87,7 +87,7 @@ def test_verify_access_token_rejects_garbage():
 
 async def test_refresh_rotates_and_revokes_old(users_db, fake_redis):
     user = auth_service.register("gina@example.com", "topsecret123")
-    tokens = auth_service.issue_tokens(user)
+    tokens = await auth_service.issue_tokens(user)
 
     new_tokens = await auth_service.refresh_tokens(tokens["refresh_token"])
     assert new_tokens["access_token"] != tokens["access_token"]

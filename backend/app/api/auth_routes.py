@@ -36,7 +36,7 @@ async def register(body: UserRegister):
         user = auth_service.register(body.email, body.password)
     except auth_service.AuthError as e:
         raise auth_error_to_http(e) from e
-    tokens = auth_service.issue_tokens(user)
+    tokens = await auth_service.issue_tokens(user)
     logger.info("registered user %s", user["email"])
     return TokenResponse(**tokens)
 
@@ -47,7 +47,7 @@ async def login(body: UserLogin):
         user = auth_service.authenticate(body.email, body.password)
     except auth_service.AuthError as e:
         raise auth_error_to_http(e) from e
-    tokens = auth_service.issue_tokens(user)
+    tokens = await auth_service.issue_tokens(user)
     logger.info("login user %s", user["email"])
     return TokenResponse(**tokens)
 

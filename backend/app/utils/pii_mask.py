@@ -22,6 +22,7 @@ import re
 from typing import Any
 
 import pandas as pd
+from pandas.api.types import is_string_dtype
 
 # Order matters: more specific patterns first so ID-card-shaped numbers
 # don't get caught by the broader bank-card pattern.
@@ -58,17 +59,18 @@ def mask_rows(rows: list[dict]) -> list[dict]:
 
 
 def mask_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Mask every object-column value in a DataFrame (layer 1).
+    """Mask every string-column value in a DataFrame (layer 1).
 
     Returns a new DataFrame; the input is not mutated. We only scan
-    object-dtype columns because numeric / datetime columns can't carry
-    PII strings.
+    string-dtype columns (which covers both the legacy ``object`` dtype
+    and pandas 3's native ``str`` dtype) because numeric / datetime
+    columns can't carry PII strings.
     """
     if df.empty:
         return df.copy()
     out = df.copy()
     for col in out.columns:
-        if out[col].dtype == object:
+        if is_string_dtype(out[col]):
             out[col] = out[col].map(mask_value)
     return out
 

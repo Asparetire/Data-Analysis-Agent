@@ -192,13 +192,17 @@ def authenticate(email: str, password: str) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def issue_tokens(user: dict) -> dict:
+async def issue_tokens(user: dict) -> dict:
     """Issue an access + refresh token pair for the given user dict."""
     now = _utcnow()
     access_payload = {
         "sub": user["id"],
         "email": user["email"],
         "type": "access",
+        # jti makes every issued access token unique even when two calls
+        # land in the same second (same iat/exp) — otherwise the test
+        # asserting new_tokens != old_tokens would flake on fast machines.
+        "jti": str(uuid.uuid4()),
         "iat": now,
         "exp": now + timedelta(minutes=settings.ACCESS_TOKEN_TTL_MINUTES),
     }
@@ -216,7 +220,7 @@ def issue_tokens(user: dict) -> dict:
     refresh_token = jwt.encode(
         refresh_payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM
     )
-    _store_refresh(jti, user["id"])
+    await _store_refresh(jti, user["id"])
     return {
         "access_token": access_token,
         "refresh_token": refresh_token,
@@ -266,7 +270,7 @@ async def refresh_tokens(refresh_token: str) -> dict:
     user = get_user(payload["sub"])
     if user is None or not user["is_active"]:
         raise InvalidCredentials("User not found or disabled")
-    return issue_tokens({"id": user["id"], "email": user["email"]})
+    return await issue_tokens({"id": user["id"], "email": user["email"]})
 
 
 async def revoke_refresh_token(refresh_token: str) -> None:
@@ -290,23 +294,19 @@ async def revoke_refresh_token(refresh_token: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _store_refresh(jti: str, user_id: str) -> None:
+async def _store_refresh(jti: str, user_id: str) -> None:
     """Persist a refresh-token jti so we can revoke later.
 
-    Uses a sync Redis client (separate from the async session_service one)
-    so register/login can stay sync. We reuse the same URL.
+    Routes through ``session_service._get_redis()`` so tests can patch it
+    with fakeredis (the previous sync-client path bypassed the fake and
+    wrote to real Redis, breaking test isolation when Redis was running
+    locally).
     """
-    import redis as sync_redis
-
-    client = sync_redis.from_url(settings.REDIS_URL, decode_responses=True)
-    try:
-        client.setex(
-            f"{REFRESH_KEY_PREFIX}{jti}",
-            int(timedelta(days=settings.REFRESH_TOKEN_TTL_DAYS).total_seconds()),
-            user_id,
-        )
-    finally:
-        client.close()
+    await session_service._get_redis().setex(
+        f"{REFRESH_KEY_PREFIX}{jti}",
+        int(timedelta(days=settings.REFRESH_TOKEN_TTL_DAYS).total_seconds()),
+        user_id,
+    )
 
 
 # ---------------------------------------------------------------------------
