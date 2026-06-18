@@ -32,9 +32,11 @@ async function register(page: Page, email: string, password = 'test-password-123
 
 async function uploadCsv(page: Page, filename: string, rows: string) {
   // Home page shows the upload dropzone when no data source is active.
-  // Ensure we're on Home.
-  await page.getByRole('button', { name: /Chat|聊天/ }).click();
-  const input = page.locator('input[type="file"]');
+  // Ensure we're on Home. Match the nav button exactly so the "清空对话"
+  // (clear chat) button on the chat surface doesn't also match.
+  // nav.home is "Chat" (en) / "对话" (zh); default locale is zh.
+  await page.getByRole('button', { name: '对话', exact: true }).click();
+  const input = page.locator('input[type="file"]').first();
   // Build a temp file Playwright can attach.
   const dir = join(tmpdir(), 'e2e-uploads');
   mkdirSync(dir, { recursive: true });
@@ -42,7 +44,11 @@ async function uploadCsv(page: Page, filename: string, rows: string) {
   writeFileSync(path, rows, 'utf-8');
   await input.setInputFiles(path);
   // The upload area flips to "uploaded" state showing the filename.
-  await expect(page.getByText(filename)).toBeVisible({ timeout: 15_000 });
+  // Use exact match -- the chat header also renders "当前数据源:<filename>",
+  // and the sidebar's ds-name title is exactly the filename.
+  await expect(page.getByText(filename, { exact: true })).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 test.describe('Phase 4E smoke', () => {
@@ -64,7 +70,9 @@ test.describe('Phase 4E smoke', () => {
     await expect(page.getByText('mock', { exact: false })).toBeVisible({ timeout: 20_000 });
 
     // Switch to the Analysis page and confirm the paginated browser loads.
-    await page.getByRole('button', { name: /Analysis|分析/ }).click();
+    // Exact match: "打开分析页" (Home's DataPreview button) also matches the
+    // regex /分析/. nav.analysis is "Analysis" (en) / "分析" (zh); default zh.
+    await page.getByRole('button', { name: '分析', exact: true }).click();
     // The schema panel header appears once the table list resolves.
     await expect(page.getByText(/Schema|字段概览/)).toBeVisible({ timeout: 15_000 });
     // Footer "X–Y / 共 N 行" or English equivalent — total should be 5.
@@ -95,7 +103,12 @@ test.describe('Phase 4E smoke', () => {
     const emailA = uniqueEmail();
     await register(pageA, emailA);
     await uploadCsv(pageA, 'acl_secret.csv', 'id,secret\n1,aaa\n2,bbb\n');
-    await expect(pageA.getByText('acl_secret.csv')).toBeVisible({ timeout: 15_000 });
+    // Exact match -- the sidebar's ds-name div is exactly the filename; the
+    // chat header ("当前数据源:<filename>") and Home preview ("<filename> · 预览
+    // N 行") also contain it as a substring.
+    await expect(pageA.getByText('acl_secret.csv', { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
 
     // User B registers in a fresh context — should see zero data sources.
     const pageB = await browser.newPage();

@@ -310,14 +310,25 @@ export async function* streamChat(
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      let sep = buffer.indexOf('\n\n');
+      // Normalize CRLF / CR to LF so the event-separator search only has to
+      // handle one variant. sse-starlette emits `\r\n` line endings, so the
+      // event separator is `\r\n\r\n` on the wire -- a plain `indexOf('\n\n')`
+      // misses it (the two LFs are split by a CR) and no events ever parse.
+      const normalized = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      buffer = '';
+
+      let sep = normalized.indexOf('\n\n');
+      let last = 0;
       while (sep !== -1) {
-        const block = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+        const block = normalized.slice(last, sep);
+        last = sep + 2;
         const event = parseEventBlock(block);
         if (event) yield event;
-        sep = buffer.indexOf('\n\n');
+        sep = normalized.indexOf('\n\n', last);
       }
+      // Keep the trailing partial (no double-LF yet) for the next iteration.
+      if (last > 0) buffer = normalized.slice(last);
+      else buffer = normalized;
     }
     // Flush any trailing data the server emitted without a final blank line.
     if (buffer.trim()) {
