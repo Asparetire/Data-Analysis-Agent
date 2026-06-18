@@ -88,6 +88,9 @@ class Settings(BaseSettings):
         return v
 
 
+_DEV_DEFAULT_JWT_SECRET = "dev-only-change-me-in-prod"
+
+
 def _check_required_at_startup() -> None:
     # In mock mode (E2E tests) the OpenAI key isn't needed; skip the warning
     # so test logs aren't noisy.
@@ -100,5 +103,30 @@ def _check_required_at_startup() -> None:
         )
 
 
+def _validate_jwt_secret() -> None:
+    """Refuse to boot with the placeholder JWT secret outside dev/test.
+
+    The default in Settings is a known string committed to the repo; anyone
+    reading the source can forge tokens for an instance that didn't override
+    it. We treat that as a fatal misconfiguration rather than a warning.
+
+    Exempt environments:
+      - ``LLM_MOCK=1`` (E2E / CI) — the E2E config sets its own short secret,
+        but tests that don't go through playwright.config may inherit the
+        default; we don't want pytest collection to abort.
+      - ``JWT_SECRET_DEV_OK=1`` — explicit opt-in for local dev when the
+        developer wants to run without configuring a secret.
+    """
+    secret = settings.JWT_SECRET
+    if secret == _DEV_DEFAULT_JWT_SECRET or len(secret) < 32:
+        if getattr(settings, "LLM_MOCK", False) or os.getenv("JWT_SECRET_DEV_OK"):
+            return
+        raise RuntimeError(
+            "JWT_SECRET is the committed placeholder or shorter than 32 bytes. "
+            "Set a long random string in .env (or JWT_SECRET_DEV_OK=1 for local dev)."
+        )
+
+
 settings = Settings()
 _check_required_at_startup()
+_validate_jwt_secret()

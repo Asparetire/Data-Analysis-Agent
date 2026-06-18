@@ -4,13 +4,20 @@ Goals:
 - Tests never touch the real Redis (fakeredis substitute).
 - Tests never touch the real upload / sqlite directories (tmp_path override).
 - Each test gets a fresh fakeredis instance so state never leaks across tests.
+- JWT_SECRET is set to a test-only value before app.config is imported, so
+  the startup validator doesn't abort collection.
 """
 
 from __future__ import annotations
 
 import io
+import os
 from collections.abc import AsyncIterator
 from typing import Any
+
+# Must run before `app.config` is imported anywhere. pytest loads conftest
+# first, so setting it at module top does the job.
+os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-32-bytes-long-aaaa")
 
 import fakeredis.aioredis
 import pytest
