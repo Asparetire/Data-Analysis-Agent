@@ -49,17 +49,20 @@ npm run dev
 
 访问 http://localhost:5173 。Vite 已配 `/api` 代理到 `http://localhost:8000`。
 
-### 3. Docker（可选）
+### 3. Docker（生产形态）
 
 ```bash
 cp .env.example .env  # 项目根目录
-# 编辑 .env 填入 OPENAI_API_KEY 和 JWT_SECRET
+# 编辑 .env 填入 OPENAI_API_KEY / JWT_SECRET / MIGRATION_ADMIN_PASSWORD / MINIO_ROOT_PASSWORD
 docker compose up --build
 ```
 
-- 前端: http://localhost:5173
-- 后端: http://localhost:8000
-- Redis: localhost:6379
+- 入口（Nginx，前端静态 + /api 反代）: http://localhost
+- MinIO 控制台: http://localhost:9001
+- Redis: localhost:6379（本地开发保留 host 端口；生产部署可去掉）
+- 后端 8000 / MinIO 9000 仅在 compose 网络内暴露，不直接访问
+
+多阶段镜像：backend ~250MB（builder 装 gcc，runtime 不带），frontend = nginx:alpine + 静态 dist。TLS 交给上游（云 LB / Cloudflare），nginx 只听 80。
 
 ### 4. 测试
 
