@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import uuid
 from datetime import datetime
@@ -229,7 +230,9 @@ async def preview_datasource(
     user: dict = Depends(current_user),
 ):
     _check_datasource_owner(data_source_id, user)
-    rows = data_service.get_sample_rows(data_source_id, limit=limit)
+    # data_service.get_sample_rows is a sync SQLite call; run it in a thread
+    # so it doesn't block the event loop on large tables.
+    rows = await asyncio.to_thread(data_service.get_sample_rows, data_source_id, limit=limit)
     if rows is None:
         raise HTTPException(status_code=404, detail="Data source not found or empty")
     return {"rows": rows, "count": len(rows)}
@@ -242,7 +245,9 @@ async def schema_datasource(
     user: dict = Depends(current_user),
 ):
     _check_datasource_owner(data_source_id, user)
-    rows = data_service.get_sample_rows(data_source_id, limit=1, table=table)
+    rows = await asyncio.to_thread(
+        data_service.get_sample_rows, data_source_id, limit=1, table=table
+    )
     if rows is None:
         raise HTTPException(status_code=404, detail="Data source not found or empty")
     sample = rows[0]
@@ -268,15 +273,19 @@ async def rows_datasource(
     interpolating them into SQL.
     """
     _check_datasource_owner(data_source_id, user)
-    target = table or data_service.get_primary_table(data_source_id)
-    payload = data_service.fetch_rows(
-        data_source_id,
-        table=target,
-        offset=offset,
-        limit=limit,
-        sort=sort,
-        direction=dir,
-    )
+
+    def _fetch() -> dict | None:
+        target = table or data_service.get_primary_table(data_source_id)
+        return data_service.fetch_rows(
+            data_source_id,
+            table=target,
+            offset=offset,
+            limit=limit,
+            sort=sort,
+            direction=dir,
+        )
+
+    payload = await asyncio.to_thread(_fetch)
     if payload is None:
         raise HTTPException(status_code=404, detail="Table not found")
     # Phase 4C layer 2: mask PII in the rows leaving the API, even though
@@ -294,12 +303,16 @@ async def tables_datasource(
 ):
     """Phase 4D: list tables in this data source for the table browser."""
     _check_datasource_owner(data_source_id, user)
-    names = data_service.list_tables(data_source_id)
-    # Annotate with row counts so the UI can hint at which sheet is big.
-    out = []
-    for name in names:
-        info = data_service.get_table_info(data_source_id, name)
-        out.append({"name": name, "row_count": info.get("row_count", 0) if info else 0})
+
+    def _list() -> list[dict]:
+        names = data_service.list_tables(data_source_id)
+        out = []
+        for name in names:
+            info = data_service.get_table_info(data_source_id, name)
+            out.append({"name": name, "row_count": info.get("row_count", 0) if info else 0})
+        return out
+
+    out = await asyncio.to_thread(_list)
     return {"tables": out}
 
 
@@ -311,8 +324,13 @@ async def lineage_datasource(
 ):
     _check_datasource_owner(data_source_id, user)
     cap = max(1, min(int(limit), 200))
-    raw = metadata_service.get_lineage(data_source_id, limit=cap)
-    full = metadata_service.get_lineage(data_source_id, limit=None)
+
+    def _load() -> tuple[list[dict], list[dict]]:
+        raw = metadata_service.get_lineage(data_source_id, limit=cap)
+        full = metadata_service.get_lineage(data_source_id, limit=None)
+        return raw, full
+
+    raw, full = await asyncio.to_thread(_load)
     entries = [LineageEntry(**r) for r in raw if isinstance(r, dict)]
     return LineageResponse(
         data_source_id=data_source_id,
@@ -327,10 +345,16 @@ async def delete_datasource(
     user: dict = Depends(current_user),
 ):
     _check_datasource_owner(data_source_id, user)
-    deleted = data_service.delete_data_source(data_source_id)
+
+    def _drop() -> bool:
+        deleted = data_service.delete_data_source(data_source_id)
+        if deleted:
+            metadata_service.delete_entry(data_source_id)
+        return deleted
+
+    deleted = await asyncio.to_thread(_drop)
     if not deleted:
         raise HTTPException(status_code=404, detail="Data source not found")
-    metadata_service.delete_entry(data_source_id)
     sessions_removed = await session_service.delete_sessions_by_data_source(data_source_id)
     return {
         "status": "ok",
