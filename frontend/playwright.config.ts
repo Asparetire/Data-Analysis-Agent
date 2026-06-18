@@ -53,6 +53,11 @@ export default defineConfig({
         LLM_MOCK: '1',
         // Scratch data dir lives under frontend/ so .gitignore catches it.
         DATA_DIR: `../frontend/${SCRATCH_DIR}`,
+        // Main DB must also land in the scratch dir -- the default
+        // `sqlite:///./data/main.db` is relative to backend/ and CI's
+        // fresh checkout has no backend/data/, so SQLite fails with
+        // "unable to open database file" and /auth/* 500s on every call.
+        DATABASE_URL: `sqlite:///../frontend/${SCRATCH_DIR}/main.db`,
         // DB 15 is reserved for E2E so we don't collide with dev sessions.
         REDIS_URL: 'redis://localhost:6379/15',
         JWT_SECRET: 'e2e-secret',
