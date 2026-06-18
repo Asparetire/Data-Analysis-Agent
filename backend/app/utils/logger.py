@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import sys
 
+from .log_scrub import ScrubFilter
+
 _CONFIGURED = False
 
 
@@ -17,6 +19,8 @@ def _configure_root() -> None:
             datefmt="%Y-%m-%d %H:%M:%S",
         )
     )
+    # Phase 4B: redact PII / secrets before any handler sees the message.
+    handler.addFilter(ScrubFilter())
     root = logging.getLogger()
     root.handlers.clear()
     root.addHandler(handler)

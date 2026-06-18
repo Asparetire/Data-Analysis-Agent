@@ -38,6 +38,21 @@ SYSTEM_PROMPT = """你是一个专业的数据分析助手。用户会先上传 
 
 
 def _build_llm(temperature: float = 0):
+    # Phase 4E: when LLM_MOCK is on, return a deterministic stub so E2E
+    # tests can run without an OpenAI key. The stub implements the same
+    # surface the agent graph uses (``bind_tools`` + ``astream``).
+    if settings.LLM_MOCK:
+        from .mock_llm import MockChatModel
+
+        return MockChatModel()
+
+    provider = (settings.LLM_PROVIDER or "openai").lower()
+    if provider == "anthropic":
+        return _build_anthropic_llm(temperature)
+    return _build_openai_llm(temperature)
+
+
+def _build_openai_llm(temperature: float) -> ChatOpenAI:
     # Pull the key / base URL from pydantic settings (which reads .env),
     # not from os.getenv -- pydantic-loaded values never make it into
     # the process env, so ChatOpenAI would otherwise see no credentials.
@@ -45,12 +60,39 @@ def _build_llm(temperature: float = 0):
         "model": settings.OPENAI_MODEL,
         "temperature": temperature,
         "streaming": True,
+        # Reasoning models (e.g. minimax-m3 on Ark) emit a long chain of
+        # thinking tokens before any visible content. Without an explicit
+        # cap, the server's default max_tokens can be small enough that the
+        # reasoning phase eats the whole budget and content stays empty —
+        # which surfaces to the user as "(empty response)". 4k is enough
+        # headroom for our schema-driven SQL agent while staying well under
+        # any per-call quota.
+        "max_tokens": 4096,
     }
     if settings.OPENAI_API_KEY:
         kwargs["api_key"] = settings.OPENAI_API_KEY
     if settings.OPENAI_BASE_URL:
         kwargs["base_url"] = settings.OPENAI_BASE_URL
     return ChatOpenAI(**kwargs)
+
+
+def _build_anthropic_llm(temperature: float):
+    # Lazy import so the anthropic SDK is only required when actually
+    # selected — installations that don't use Anthropic can skip
+    # ``langchain-anthropic`` entirely.
+    from langchain_anthropic import ChatAnthropic
+
+    kwargs: dict[str, Any] = {
+        "model": settings.ANTHROPIC_MODEL,
+        "temperature": temperature,
+        "streaming": True,
+        "max_tokens": 4096,
+    }
+    if settings.ANTHROPIC_API_KEY:
+        kwargs["api_key"] = settings.ANTHROPIC_API_KEY
+    if settings.ANTHROPIC_BASE_URL:
+        kwargs["base_url"] = settings.ANTHROPIC_BASE_URL
+    return ChatAnthropic(**kwargs)
 
 
 TokenCallback = Callable[[str], None]
@@ -178,6 +220,8 @@ def build_graph(
     data_source_ids: Sequence[str] | None = None,
     chat_history: Sequence[dict] | None = None,
     token_cb: TokenCallback | None = None,
+    *,
+    owner_id: str | None = None,
 ):
     """Build a LangGraph compiled graph for a given data source.
 
@@ -196,6 +240,9 @@ def build_graph(
     Intermediate reasoning tokens -- those streamed before the model decides
     to call a tool -- are swallowed because users would find them noisy and
     they're frequently reformulated anyway.
+
+    Phase 4B: ``owner_id`` is forwarded to ``build_tools`` so each
+    ``query_database`` invocation can stamp the user on its lineage record.
     """
     all_ids: list[str] = []
     if data_source_id:
@@ -203,7 +250,7 @@ def build_graph(
     for i in data_source_ids or []:
         if i and i not in all_ids:
             all_ids.append(i)
-    tools = build_tools(all_ids)
+    tools = build_tools(all_ids, owner_id=owner_id)
     llm = _build_llm().bind_tools(tools)
     tool_node = ToolNode(tools)
     prior_messages = history_to_messages(chat_history or [])

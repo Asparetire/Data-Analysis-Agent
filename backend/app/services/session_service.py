@@ -23,6 +23,7 @@ _UPDATABLE_FIELDS = {
     "chat_history",
     "intermediate_results",
     "last_query",
+    # owner_id is intentionally NOT here — clients can't reassign ownership.
 }
 
 
@@ -34,10 +35,11 @@ def _key(session_id: str) -> str:
     return f"{SESSION_KEY_PREFIX}{session_id}"
 
 
-def _empty_session(session_id: str) -> dict[str, Any]:
+def _empty_session(session_id: str, owner_id: str | None = None) -> dict[str, Any]:
     now = _utcnow()
     return {
         "session_id": session_id,
+        "owner_id": owner_id,  # Phase 4A: ACL — None until first chat binds a user
         "data_source_id": None,
         "data_source_ids": [],
         "chat_history": [],
@@ -76,10 +78,15 @@ async def ping() -> bool:
         return False
 
 
-async def create_session() -> str:
-    """Create a new session and return its UUID4 id."""
+async def create_session(owner_id: str | None = None) -> str:
+    """Create a new session and return its UUID4 id.
+
+    Phase 4A: ``owner_id`` is stamped at creation so subsequent reads can
+    enforce ACL. Sessions created without an owner (legacy callers, tests)
+    are visible to everyone — the route layer never allows that path.
+    """
     session_id = str(uuid.uuid4())
-    payload = _empty_session(session_id)
+    payload = _empty_session(session_id, owner_id=owner_id)
     await _get_redis().setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(payload))
     logger.info("created session %s", session_id)
     return session_id

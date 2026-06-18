@@ -21,9 +21,30 @@ class Settings(BaseSettings):
     PROJECT_NAME: str = "Data Analysis Agent"
 
     # LLM
+    # ``LLM_PROVIDER`` picks the chat-model backend: ``"openai"`` (default,
+    # OpenAI-compatible: Ark v3 endpoint, OpenAI itself, etc.) or
+    # ``"anthropic"`` (Anthropic-compatible: Claude, Ark coding endpoint
+    # at /api/coding without the /v3 suffix). Switching is env-only —
+    # change the value and restart the backend; there's no runtime swap.
+    LLM_PROVIDER: str = "openai"
+
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
     OPENAI_BASE_URL: str | None = None
+
+    ANTHROPIC_API_KEY: str = ""
+    ANTHROPIC_MODEL: str = "claude-3-5-sonnet-20241022"
+    # Anthropic-compatible base URL. The official API is
+    # https://api.anthropic.com; Ark's coding endpoint is
+    # https://ark.cn-beijing.volces.com/api/coding. Leave None for the
+    # official API.
+    ANTHROPIC_BASE_URL: str | None = None
+
+    # Phase 4E: when true, ``_build_llm`` returns ``MockChatModel`` instead of
+    # ``ChatOpenAI``. Used by Playwright E2E tests so they don't need an
+    # OpenAI key. Never set this in production -- the mock cannot answer
+    # real questions.
+    LLM_MOCK: bool = False
 
     # 主库（用于会话元数据等，data_source 业务表走独立 SQLite 文件）
     DATABASE_URL: str = "sqlite:///./data/main.db"
@@ -36,6 +57,22 @@ class Settings(BaseSettings):
 
     # CORS：从环境变量读 JSON 字符串，例如 '["http://localhost:5173"]'
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    # Phase 4: 认证 / JWT
+    # JWT_SECRET 应在 .env 中覆盖；保留默认值只为本地开发不被卡住。
+    JWT_SECRET: str = "dev-only-change-me-in-prod"
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_TTL_MINUTES: int = 15
+    REFRESH_TOKEN_TTL_DAYS: int = 7
+
+    # 首次启动且 main.db 中已有无主数据源时，把它们绑定到这个默认用户。
+    # 仅在迁移路径下创建；之后用户应自行注册。
+    MIGRATION_ADMIN_EMAIL: str = "admin@local.invalid"
+    MIGRATION_ADMIN_PASSWORD: str = "change-me-now"
+
+    # Phase 4B: 限流（按用户 / 按 IP 的 sliding window，每分钟）
+    RATE_LIMIT_PER_USER_PER_MINUTE: int = 60
+    RATE_LIMIT_PER_IP_PER_MINUTE: int = 20
 
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
@@ -52,6 +89,10 @@ class Settings(BaseSettings):
 
 
 def _check_required_at_startup() -> None:
+    # In mock mode (E2E tests) the OpenAI key isn't needed; skip the warning
+    # so test logs aren't noisy.
+    if getattr(settings, "LLM_MOCK", False):
+        return
     if not os.getenv("OPENAI_API_KEY"):
         warnings.warn(
             "OPENAI_API_KEY 未设置；调用 LLM 相关接口会失败。",

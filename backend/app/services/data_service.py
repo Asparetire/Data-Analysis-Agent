@@ -13,6 +13,7 @@ from ..config import settings
 from ..services import metadata_service, query_cache
 from ..utils.database import SQLITE_DIR, dispose_engine, get_engine
 from ..utils.logger import get_logger
+from ..utils.pii_mask import mask_dataframe, mask_value
 
 logger = get_logger(__name__)
 
@@ -224,7 +225,11 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
     for table_name, df in sheets.items():
         if df is None or df.empty:
             continue
-        clean_sheets[table_name] = _normalize_columns(df)
+        normalized = _normalize_columns(df)
+        # Phase 4C layer 1: scrub PII before it hits SQLite. The raw value
+        # never lands on disk; downstream queries see the mask. This is a
+        # one-way transform — the original cannot be recovered.
+        clean_sheets[table_name] = mask_dataframe(normalized)
 
     if not clean_sheets:
         upload_path.unlink(missing_ok=True)
@@ -245,7 +250,9 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
 
     # Persist per-table column metadata + indexes to the sidecar so the
     # agent's later ``list_tables`` / ``get_table_schema`` calls can show
-    # descriptions and units in the prompt.
+    # descriptions and units in the prompt. Samples are masked too so the
+    # LLM prompt (layer 4) never carries raw PII even if the column wasn't
+    # caught by the upload scrub.
     try:
         metadata_service.set_source_type(file_id, "sqlite")
         for table_name, df in clean_sheets.items():
@@ -254,7 +261,7 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
                     "type": infer_column_type(df[col]),
                     "description": "",
                     "unit": None,
-                    "sample": _sample_values(df[col]),
+                    "sample": [mask_value(v) for v in _sample_values(df[col])],
                 }
                 for col in df.columns
             }
@@ -351,6 +358,62 @@ def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, A
             }
         )
     return {"table": target, "row_count": count, "columns": columns}
+
+
+def fetch_rows(
+    data_source_id: str,
+    *,
+    table: str,
+    offset: int = 0,
+    limit: int = 20,
+    sort: str | None = None,
+    direction: str = "asc",
+) -> dict | None:
+    """Phase 4D: server-side paginated read from one table.
+
+    Returns ``{table, rows, columns, total, offset, limit}`` or None when
+    the table doesn't exist. ``sort`` must be a real column of the table;
+    ``direction`` must be ``asc`` or ``desc``. Both are validated against
+    the table schema before being interpolated into SQL — the table name
+    and column names are quoted with double quotes, but we still refuse
+    anything that doesn't appear in PRAGMA table_info so a malicious
+    payload like ``"col"; DROP TABLE x; --`` can't slip through.
+    """
+    if direction.lower() not in ("asc", "desc"):
+        direction = "asc"
+    offset = max(0, int(offset))
+    limit = max(1, min(int(limit), 200))
+    engine = get_engine(data_source_id)
+    try:
+        with engine.connect() as conn:
+            # Validate table + columns against PRAGMA before any interpolation.
+            info = conn.execute(text(f'PRAGMA table_info("{table}")')).fetchall()
+            if not info:
+                return None
+            valid_cols = {r[1] for r in info}
+            count = conn.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar()
+            # Build ORDER BY. Stable secondary sort on rowid so pages don't
+            # shuffle rows with equal sort keys.
+            if sort and sort in valid_cols:
+                order_clause = f' ORDER BY "{sort}" {direction.upper()}, rowid'
+            else:
+                order_clause = " ORDER BY rowid"
+            result = conn.execute(
+                text(f'SELECT * FROM "{table}"{order_clause} LIMIT :lim OFFSET :off'),
+                {"lim": limit, "off": offset},
+            )
+            cols = list(result.keys())
+            rows = [{c: row[i] for i, c in enumerate(cols)} for row in result.fetchall()]
+    except Exception:
+        return None
+    return {
+        "table": table,
+        "rows": rows,
+        "columns": cols,
+        "total": int(count or 0),
+        "offset": offset,
+        "limit": limit,
+    }
 
 
 def delete_data_source(data_source_id: str) -> bool:

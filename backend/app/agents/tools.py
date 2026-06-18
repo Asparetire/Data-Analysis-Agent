@@ -10,12 +10,18 @@ from sqlalchemy.exc import SQLAlchemyError
 from ..services import data_service, lineage, query_cache
 from ..utils.database import _sqlite_path, get_engine
 from ..utils.logger import get_logger
+from ..utils.pii_mask import mask_rows, mask_sql_literals, mask_value
 
 logger = get_logger(__name__)
 
 _MAX_ROWS = 100
 _LARGE_TABLE_ROW_THRESHOLD = 50_000  # above this, default samples shrink
 _LARGE_TABLE_SAMPLE_SIZE = 5
+# Phase 4C: wall-clock cap on a single SQL execution. SQLite's progress
+# handler is invoked every N opcodes; the handler checks the deadline and
+# aborts the query by returning non-zero.
+_QUERY_TIMEOUT_S = 30.0
+_PROGRESS_HANDLER_OPCODES = 1000
 
 _FORBIDDEN_KEYWORDS = re.compile(
     r"\b(insert|update|delete|drop|alter|create|replace|attach|detach|"
@@ -93,13 +99,20 @@ def _resolve_source_table(
     return primary, table_name
 
 
-def build_tools(data_source_ids: str | list[str] | None) -> list:
+def build_tools(
+    data_source_ids: str | list[str] | None,
+    *,
+    owner_id: str | None = None,
+) -> list:
     """Build the agent's tool list.
 
     Accepts a single id (backward-compat) or a list of ids. The first id
     is the primary; any others are ATTACHed to the same connection for
     cross-source JOINs. The LLM refers to them as ``ds_0`` (primary) and
     ``ds_1``/``ds_2``/... (auxiliary, in the order they were passed).
+
+    Phase 4B: ``owner_id`` is captured by the ``query_database`` closure
+    so every lineage record attributes the query to the user who ran it.
     """
     if data_source_ids is None:
         ids: list[str] = []
@@ -149,16 +162,19 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             elapsed_ms = (time.perf_counter() - t_start) * 1000.0
             lineage.record_query(
                 source_ids=binding_ids,
-                sql=sql_query,
+                sql=mask_sql_literals(sql_query),
                 ok=True,
                 row_count=cached.get("row_count", 0),
                 duration_ms=elapsed_ms,
                 cache_hit=True,
+                user_id=owner_id,
             )
+            # Layer 2: re-mask on the way out even for cache hits, in case
+            # the stored rows came from a path that bypassed masking.
             payload = {
                 "row_count": cached.get("row_count", 0),
                 "columns": cached.get("columns", []),
-                "rows": cached.get("rows", []),
+                "rows": mask_rows(cached.get("rows", [])),
                 "cache_hit": True,
             }
             return json.dumps(payload, ensure_ascii=False)
@@ -172,15 +188,32 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             # see the same database connection.
             with engine.connect() as conn:
                 dbapi_conn = conn.connection.dbapi_connection
+                # Phase 4C: install a wall-clock timeout via the SQLite
+                # progress handler. The handler is called every N opcodes;
+                # returning non-zero aborts the running statement with
+                # sqlite3.OperationalError("interrupted"). We only arm it
+                # around the user-supplied SELECT, not the ATTACH/DETACH
+                # (those are O(1)).
+                deadline = time.time() + _QUERY_TIMEOUT_S
+
+                def _timeout_handler() -> int:
+                    return 1 if time.time() > deadline else 0
+
                 cur = dbapi_conn.cursor()
                 if attach:
                     for stmt in attach.split(";"):
                         s = stmt.strip()
                         if s:
                             cur.execute(s)
-                cur.execute(limited)
-                cols = [c[0] for c in (cur.description or [])]
-                rows = cur.fetchall()
+                dbapi_conn.set_progress_handler(_timeout_handler, _PROGRESS_HANDLER_OPCODES)
+                try:
+                    cur.execute(limited)
+                    cols = [c[0] for c in (cur.description or [])]
+                    rows = cur.fetchall()
+                finally:
+                    # Clear the handler so DETACH (and any later statement
+                    # on this connection) isn't subject to the timeout.
+                    dbapi_conn.set_progress_handler(None, 0)
                 if detach:
                     for stmt in detach.split(";"):
                         s = stmt.strip()
@@ -191,6 +224,10 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
                 dict(zip(cols, [str(c) if c is not None else None for c in row], strict=False))
                 for row in rows
             ]
+            # Layer 2: mask every PII-shaped string value before caching
+            # and returning. mask_rows is idempotent — running it twice
+            # on already-masked data is a no-op.
+            data = mask_rows(data)
             cache.set_with_bindings(
                 cache_key,
                 {"columns": cols, "rows": data, "row_count": len(data)},
@@ -199,11 +236,12 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             elapsed_ms = (time.perf_counter() - t_start) * 1000.0
             lineage.record_query(
                 source_ids=binding_ids,
-                sql=sql_query,
+                sql=mask_sql_literals(sql_query),
                 ok=True,
                 row_count=len(data),
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
             )
             return json.dumps(
                 {
@@ -218,10 +256,11 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             elapsed_ms = (time.perf_counter() - t_start) * 1000.0
             lineage.record_query(
                 source_ids=binding_ids,
-                sql=sql_query,
+                sql=mask_sql_literals(sql_query),
                 ok=False,
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
                 error=str(e),
             )
             return json.dumps({"error": f"SQL error: {e}"}, ensure_ascii=False)
@@ -229,10 +268,11 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             elapsed_ms = (time.perf_counter() - t_start) * 1000.0
             lineage.record_query(
                 source_ids=binding_ids,
-                sql=sql_query,
+                sql=mask_sql_literals(sql_query),
                 ok=False,
                 duration_ms=elapsed_ms,
                 cache_hit=False,
+                user_id=owner_id,
                 error=str(e),
             )
             logger.exception("query_database failed")
@@ -309,6 +349,13 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
         info = data_service.get_table_info(ds_for_target, target)
         if info is None:
             return json.dumps({"error": f"Table '{target}' not found."}, ensure_ascii=False)
+        # Layer 4: scrub sample values before they ride into the LLM prompt.
+        # The sidecar samples were already masked at upload time, but this
+        # also covers any column added via set_table_metadata later.
+        cols = info.get("columns") or []
+        for c in cols:
+            if c.get("sample"):
+                c["sample"] = [mask_value(v) for v in c["sample"]]
         info = {**info, "source_id": ds_for_target}
         return json.dumps(info, ensure_ascii=False)
 
@@ -344,6 +391,10 @@ def build_tools(data_source_ids: str | list[str] | None) -> list:
             return json.dumps(
                 {"error": f"Table '{target}' not found or empty."}, ensure_ascii=False
             )
+        # Layer 4: scrub sample rows for the LLM prompt. (Layer 1 already
+        # masked the persisted data; this is defense-in-depth for any row
+        # that contains a PII-shaped value not caught at upload.)
+        rows = mask_rows(rows)
         return json.dumps(
             {"source_id": ds_for_target, "table": target, "row_count": len(rows), "rows": rows},
             ensure_ascii=False,

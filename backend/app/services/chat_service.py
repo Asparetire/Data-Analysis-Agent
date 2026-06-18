@@ -6,7 +6,7 @@ from langchain_core.messages import AIMessage
 
 from ..models.schemas import ChatResponse
 from ..utils.logger import get_logger
-from . import session_service
+from . import metadata_service, session_service
 
 logger = get_logger(__name__)
 
@@ -23,6 +23,16 @@ class SessionBindingError(Exception):
         self.bound_to = bound_to
         self.requested = requested
         super().__init__(f"Session is bound to data source {bound_to}; cannot use {requested}")
+
+
+class SessionNotFound(Exception):
+    """Raised when the session id does not exist (404 in the route layer)."""
+
+
+class SessionForbidden(Exception):
+    """Raised when the session or a bound data source is not owned by the
+    requesting user. Collapsed to 404 by the route layer so ids are not
+    enumerable."""
 
 
 def _extract_final_text(messages) -> str:
@@ -44,18 +54,29 @@ async def _resolve_session(
     session_id: str,
     data_source_id: str | None,
     data_source_ids: list[str] | None,
+    *,
+    owner_id: str | None = None,
 ) -> dict:
     """Get (or create) the session and merge in the requested bindings.
 
+    Phase 4A: when ``owner_id`` is supplied, every existing session must
+    already be owned by that user — otherwise we raise ``SessionForbidden``
+    (the route layer turns this into 404). Newly created sessions are
+    stamped with ``owner_id`` so future requests can re-assert ownership.
+
     Rules:
-    - Missing session: create one and bind the requested ids (deduped).
+    - Missing session: create one (owned by ``owner_id``) and bind the
+      requested ids (deduped).
     - Single-id request that disagrees with the primary: still an error.
     - Multi-id request: merged into the session's binding list.
     - Single-id request with no primary yet: bind it.
     """
     session = await session_service.get_session(session_id)
     if session is None:
-        new_id = await session_service.create_session()
+        if owner_id is None:
+            # Refuse to create ownerless sessions via the authed path.
+            raise SessionNotFound(session_id)
+        new_id = await session_service.create_session(owner_id=owner_id)
         merged: list[str] = []
         if data_source_id and data_source_id not in merged:
             merged.append(data_source_id)
@@ -68,6 +89,11 @@ async def _resolve_session(
         else:
             session = await session_service.get_session(new_id)
         return session  # type: ignore[return-value]
+
+    if owner_id is not None:
+        session_owner = session.get("owner_id")
+        if not session_owner or session_owner != owner_id:
+            raise SessionForbidden(session_id)
 
     bound_primary = session.get("data_source_id")
     if data_source_id and bound_primary and data_source_id != bound_primary and not data_source_ids:
@@ -86,21 +112,36 @@ async def _resolve_session(
     return session  # type: ignore[return-value]
 
 
+def _assert_owns_data_sources(owner_id: str, ds_ids: list[str]) -> None:
+    """Raise SessionForbidden if any of ``ds_ids`` is not owned by ``owner_id``."""
+    for ds_id in ds_ids:
+        owner = metadata_service.get_owner(ds_id)
+        if not owner or owner != owner_id:
+            raise SessionForbidden(ds_id)
+
+
 async def run_chat(
     session_id: str,
     message: str,
     data_source_id: str | None = None,
     data_source_ids: list[str] | None = None,
+    *,
+    owner_id: str | None = None,
 ) -> ChatResponse:
     """Run one chat turn with Redis-backed session memory."""
     try:
-        session = await _resolve_session(session_id, data_source_id, data_source_ids)
+        session = await _resolve_session(
+            session_id, data_source_id, data_source_ids, owner_id=owner_id
+        )
     except SessionBindingError as e:
         return ChatResponse(
             session_id=session_id,
             message="",
             error=str(e),
         )
+    except (SessionNotFound, SessionForbidden):
+        # Bubble up to the route layer so it returns the right HTTP status.
+        raise
     except Exception as e:
         logger.exception("session resolution failed")
         return ChatResponse(
@@ -109,11 +150,15 @@ async def run_chat(
             error=f"Session error: {e}",
         )
 
+    # Phase 4A: every bound data source must be owned by the same user.
     active_session_id = session["session_id"]
     active_data_source_id = session.get("data_source_id")
     all_ids = list(session.get("data_source_ids") or [])
     if active_data_source_id and active_data_source_id not in all_ids:
         all_ids.insert(0, active_data_source_id)
+    if owner_id is not None and all_ids:
+        _assert_owns_data_sources(owner_id, all_ids)
+
     history = session.get("chat_history") or []
 
     # Local import: app.agents.graph transitively imports app.services
@@ -124,6 +169,7 @@ async def run_chat(
         data_source_id=active_data_source_id,
         data_source_ids=all_ids,
         chat_history=history,
+        owner_id=owner_id,
     )
     state = initial_state(
         session_id=active_session_id,

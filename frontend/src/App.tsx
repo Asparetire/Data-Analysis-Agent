@@ -1,6 +1,17 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Database, Home as HomeIcon, BarChart3, Loader2, Moon, Sun, Menu, X } from 'lucide-react';
+import {
+  Database,
+  Home as HomeIcon,
+  BarChart3,
+  Loader2,
+  Moon,
+  Sun,
+  Menu,
+  X,
+  LogOut,
+} from 'lucide-react';
 import { useChatStore, type PageKey } from './store/chatStore';
+import { useAuthStore } from './store/authStore';
 import { useChat } from './hooks/useChat';
 import { useUpload } from './hooks/useUpload';
 import { toggleLocale, toggleTheme, useT, useTheme } from './hooks/useUi';
@@ -8,6 +19,7 @@ import Sidebar from './components/Sidebar';
 import FileUpload from './components/Upload';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
+import Auth from './pages/Auth';
 import './App.css';
 
 export default function App() {
@@ -24,6 +36,17 @@ export default function App() {
   const [theme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
 
+  // Phase 4A: bootstrap auth on mount. While status is loading we show a
+  // splash; once it resolves to 'guest' we render the Auth page; only when
+  // it reaches 'authed' do we render the rest of the app.
+  const authStatus = useAuthStore((s) => s.status);
+  const bootstrap = useAuthStore((s) => s.bootstrap);
+  const authUser = useAuthStore((s) => s.user);
+  const logout = useAuthStore((s) => s.logout);
+  useEffect(() => {
+    void bootstrap();
+  }, [bootstrap]);
+
   const navItems: { key: PageKey; label: string; icon: ReactNode }[] = useMemo(
     () => [
       { key: 'home', label: t('nav.home'), icon: <HomeIcon size={14} /> },
@@ -36,6 +59,7 @@ export default function App() {
   // create a new one. This way the very first chat doesn't have to wait for
   // a round-trip to mint a session.
   useEffect(() => {
+    if (authStatus !== 'authed') return;
     let alive = true;
     (async () => {
       if (sessionId) {
@@ -46,8 +70,6 @@ export default function App() {
         try {
           await ensureSession();
         } catch (e) {
-          // Surface a connection error once; the rest of the app will keep
-          // working and useChat will surface the same error on the next send.
           // eslint-disable-next-line no-console
           console.error('failed to create session', e);
         }
@@ -56,7 +78,7 @@ export default function App() {
     return () => {
       alive = false;
     };
-  }, [sessionId, ensureSession, restoreSession]);
+  }, [sessionId, ensureSession, restoreSession, authStatus]);
 
   // Listen for suggestion chips from the Home page.
   useEffect(() => {
@@ -71,6 +93,18 @@ export default function App() {
   }, [sendMessage, activeId]);
 
   const Page = useMemo(() => (page === 'home' ? Home : Analysis), [page]);
+
+  if (authStatus === 'idle' || authStatus === 'loading') {
+    return (
+      <div className="app-splash">
+        <Loader2 className="spin" size={24} />
+      </div>
+    );
+  }
+
+  if (authStatus !== 'authed') {
+    return <Auth />;
+  }
 
   return (
     <div className="app">
@@ -92,6 +126,11 @@ export default function App() {
               </button>
             ))}
           </nav>
+          {authUser ? (
+            <span className="auth-user" title={authUser.email}>
+              {authUser.email}
+            </span>
+          ) : null}
           <button
             type="button"
             className="icon-btn lang"
@@ -109,6 +148,15 @@ export default function App() {
             aria-label={t('theme.toggle')}
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={logout}
+            title="退出登录"
+            aria-label="退出登录"
+          >
+            <LogOut size={16} />
           </button>
           <button
             type="button"

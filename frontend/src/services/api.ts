@@ -4,7 +4,9 @@ import type {
   DataSource,
   LineageResponse,
   SessionView,
+  TokenResponse,
   UploadResponse,
+  UserView,
 } from '../types';
 
 // Relative base URL so the Vite dev server's /api proxy and any production
@@ -17,6 +19,86 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Phase 4A: attach the JWT to every request. The token lives in localStorage
+// (see authStore) — reading it lazily here avoids a circular import with
+// the Zustand store and stays in sync even when login/logout rotates it.
+api.interceptors.request.use((config) => {
+  try {
+    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
+    if (token) {
+      config.headers = config.headers ?? {};
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+  } catch {
+    /* localStorage may be unavailable (private mode) — ignore */
+  }
+  return config;
+});
+
+// Phase 4A: on 401, try a single refresh-token rotation, then replay the
+// request once. If refresh fails, drop the stored tokens and let the caller
+// surface the error (the route guard will redirect to /login).
+let refreshPromise: Promise<string | null> | null = null;
+
+api.interceptors.response.use(
+  (resp) => resp,
+  async (error) => {
+    const original = error.config ?? {};
+    if (
+      error.response?.status === 401 &&
+      !original.__retried &&
+      !original.url?.includes('/auth/')
+    ) {
+      original.__retried = true;
+      if (!refreshPromise) {
+        // Lazy import to avoid a cycle: authStore imports this module.
+        const { useAuthStore } = await import('../store/authStore');
+        refreshPromise = useAuthStore
+          .getState()
+          .tryRefresh()
+          .finally(() => {
+            refreshPromise = null;
+          });
+      }
+      const newToken = await refreshPromise;
+      if (newToken) {
+        original.headers = original.headers ?? {};
+        original.headers.Authorization = `Bearer ${newToken}`;
+        return api(original);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Auth (Phase 4A)
+// ---------------------------------------------------------------------------
+
+export const register = async (email: string, password: string) => {
+  const resp = await api.post<TokenResponse>('/auth/register', { email, password });
+  return resp.data;
+};
+
+export const login = async (email: string, password: string) => {
+  const resp = await api.post<TokenResponse>('/auth/login', { email, password });
+  return resp.data;
+};
+
+export const refresh = async (refreshToken: string) => {
+  const resp = await api.post<TokenResponse>('/auth/refresh', { refresh_token: refreshToken });
+  return resp.data;
+};
+
+export const logout = async (refreshToken: string) => {
+  await api.post('/auth/logout', { refresh_token: refreshToken });
+};
+
+export const getCurrentUser = async () => {
+  const resp = await api.get<UserView>('/auth/me');
+  return resp.data;
+};
 
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
@@ -44,9 +126,43 @@ export const previewDataSource = async (id: string, limit = 5) => {
   return response.data;
 };
 
-export const schemaDataSource = async (id: string) => {
+export const schemaDataSource = async (id: string, table?: string) => {
   const response = await api.get<{ schema: { name: string; type: string }[] }>(
     `/datasources/${id}/schema`,
+    { params: table ? { table } : undefined },
+  );
+  return response.data;
+};
+
+// Phase 4D: server-side pagination. The browser keeps offset/limit/sort state
+// and asks the server for one page at a time, so we never load more than the
+// page size into memory — important when a table has 100k+ rows.
+export interface RowsPage {
+  table: string;
+  rows: Record<string, unknown>[];
+  columns: string[];
+  total: number;
+  offset: number;
+  limit: number;
+}
+
+export const fetchRows = async (
+  id: string,
+  params: {
+    table?: string;
+    offset?: number;
+    limit?: number;
+    sort?: string;
+    dir?: 'asc' | 'desc';
+  },
+) => {
+  const response = await api.get<RowsPage>(`/datasources/${id}/rows`, { params });
+  return response.data;
+};
+
+export const listTables = async (id: string) => {
+  const response = await api.get<{ tables: { name: string; row_count: number }[] }>(
+    `/datasources/${id}/tables`,
   );
   return response.data;
 };
@@ -156,9 +272,19 @@ export async function* streamChat(
   if (dataSourceIds && dataSourceIds.length > 0) {
     body.data_source_ids = dataSourceIds;
   }
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  };
+  try {
+    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
+    if (token) headers.Authorization = `Bearer ${token}`;
+  } catch {
+    /* ignore */
+  }
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers,
     body: JSON.stringify(body),
   });
 
@@ -184,14 +310,25 @@ export async function* streamChat(
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
-      let sep = buffer.indexOf('\n\n');
+      // Normalize CRLF / CR to LF so the event-separator search only has to
+      // handle one variant. sse-starlette emits `\r\n` line endings, so the
+      // event separator is `\r\n\r\n` on the wire -- a plain `indexOf('\n\n')`
+      // misses it (the two LFs are split by a CR) and no events ever parse.
+      const normalized = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+      buffer = '';
+
+      let sep = normalized.indexOf('\n\n');
+      let last = 0;
       while (sep !== -1) {
-        const block = buffer.slice(0, sep);
-        buffer = buffer.slice(sep + 2);
+        const block = normalized.slice(last, sep);
+        last = sep + 2;
         const event = parseEventBlock(block);
         if (event) yield event;
-        sep = buffer.indexOf('\n\n');
+        sep = normalized.indexOf('\n\n', last);
       }
+      // Keep the trailing partial (no double-LF yet) for the next iteration.
+      if (last > 0) buffer = normalized.slice(last);
+      else buffer = normalized;
     }
     // Flush any trailing data the server emitted without a final blank line.
     if (buffer.trim()) {

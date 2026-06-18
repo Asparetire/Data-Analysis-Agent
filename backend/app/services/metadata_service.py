@@ -48,6 +48,7 @@ DISPLAY_NAME_FIELD = "display_name"
 SOURCE_TYPE_FIELD = "source_type"
 TABLES_FIELD = "tables"
 LINEAGE_FIELD = "lineage"
+OWNER_ID_FIELD = "owner_id"  # Phase 4A: ACL on data sources
 
 MAX_LINEAGE_ENTRIES = 200
 LINEAGE_TRIM_TO = 100  # When we hit the cap, drop to this size to avoid thrashing.
@@ -69,6 +70,7 @@ def _normalize_entry(entry: dict[str, Any] | None) -> dict[str, Any]:
     entry.setdefault(SOURCE_TYPE_FIELD, "unknown")
     entry.setdefault(TABLES_FIELD, {})
     entry.setdefault(LINEAGE_FIELD, [])
+    entry.setdefault(OWNER_ID_FIELD, None)
     return entry
 
 
@@ -288,3 +290,63 @@ def delete_entry(data_source_id: str) -> None:
         if data_source_id in data:
             del data[data_source_id]
             _save(data)
+
+
+# ---------------------------------------------------------------------------
+# Owner (Phase 4A ACL)
+# ---------------------------------------------------------------------------
+
+
+def set_owner(data_source_id: str, owner_id: str) -> None:
+    """Stamp the owning user id on a data source entry."""
+    with _lock:
+        data = _load()
+        entry = _get_entry(data, data_source_id)
+        entry[OWNER_ID_FIELD] = owner_id
+        data[data_source_id] = entry
+        _save(data)
+
+
+def get_owner(data_source_id: str) -> str | None:
+    """Return the owner id, or None when the entry is missing or unowned."""
+    with _lock:
+        data = _load()
+    entry = data.get(data_source_id)
+    if not isinstance(entry, dict):
+        return None
+    owner = entry.get(OWNER_ID_FIELD)
+    return owner if isinstance(owner, str) and owner else None
+
+
+def list_ids_for_owner(owner_id: str) -> list[str]:
+    """Return all data source ids owned by ``owner_id``."""
+    with _lock:
+        data = _load()
+    out: list[str] = []
+    for ds_id, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get(OWNER_ID_FIELD) == owner_id:
+            out.append(ds_id)
+    return out
+
+
+def assign_owner_to_ownerless(owner_id: str) -> int:
+    """Stamp ``owner_id`` on every sidecar entry that currently has no owner.
+
+    Used once at startup to migrate pre-Phase-4 data. Returns the count of
+    re-stamped entries.
+    """
+    with _lock:
+        data = _load()
+        stamped = 0
+        for entry in data.values():
+            if not isinstance(entry, dict):
+                continue
+            existing = entry.get(OWNER_ID_FIELD)
+            if not (isinstance(existing, str) and existing):
+                entry[OWNER_ID_FIELD] = owner_id
+                stamped += 1
+        if stamped:
+            _save(data)
+    return stamped

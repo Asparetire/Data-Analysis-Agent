@@ -4,6 +4,7 @@ from pathlib import Path
 from threading import Lock
 
 from sqlalchemy import Engine, create_engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.pool import StaticPool
 
 from ..config import settings
@@ -14,6 +15,30 @@ _lock = Lock()
 DATA_DIR = Path(settings.DATA_DIR)
 SQLITE_DIR = DATA_DIR / "sqlite"
 SQLITE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_main_db_dir() -> None:
+    """Create the parent directory of the main SQLite DB if missing.
+
+    ``DATABASE_URL`` defaults to ``sqlite:///./data/main.db`` (relative to
+    CWD). On a fresh checkout -- CI runners, new dev clones -- that
+    directory doesn't exist, so the first ``create_engine`` + connect
+    fails with ``unable to open database file``. SQLITE_DIR is already
+    mkdir'd above; this extends the same guarantee to the main DB.
+    """
+    url = make_url(settings.DATABASE_URL)
+    if not url.drivername.startswith("sqlite"):
+        return
+    db_path = url.database
+    if not db_path:
+        return  # in-memory DB, nothing to create
+    p = Path(db_path)
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+
+_ensure_main_db_dir()
 
 
 def _sqlite_path(data_source_id: str) -> str:
