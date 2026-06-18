@@ -17,3 +17,6 @@ sse-starlette>=2.0.0
 pyjwt>=2.8.0
 bcrypt>=4.1.0
 email-validator>=2.1.0
+# Phase 5B: observability
+prometheus-fastapi-instrumentator>=7.0.0
+python-json-logger>=2.0.0

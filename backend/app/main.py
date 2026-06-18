@@ -1,8 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from .api.auth_routes import router as auth_router
-from .api.middleware import RateLimitMiddleware
+from .api.middleware import RateLimitMiddleware, RequestIdMiddleware
 from .api.routes import router
 from .config import settings
 from .services import auth_service
@@ -25,7 +26,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # Phase 4B: per-user / per-IP sliding window rate limit on expensive routes.
+# Outermost — sees every request, including rate-limited 429s, before any
+# other middleware short-circuits.
 app.add_middleware(RateLimitMiddleware)
+# Phase 5B: per-request id for log correlation. Inside rate-limit so that
+# 429s still get an id (rate limit ran first and stamped its log line with
+# the id we're about to set). Order is intentional — see middleware.py docstring.
+app.add_middleware(RequestIdMiddleware)
+
+# Phase 5B: Prometheus metrics at /metrics. Default buckets cover HTTP
+# latency well enough; custom metrics can be added later via
+# Instrumentator().add(...) if needed. The endpoint is unauthenticated
+# so Prometheus can scrape without credentials — restrict at the nginx
+# layer in production (allow only the scraper's IP).
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # 注册路由
 app.include_router(router, prefix=settings.API_V1_STR)

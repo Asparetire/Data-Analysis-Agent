@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_USER_PER_MINUTE: int = 60
     RATE_LIMIT_PER_IP_PER_MINUTE: int = 20
 
+    # Phase 5B: 日志格式 "json"（生产，方便 ELK/Loki 摄入）或 "text"（本地可读）
+    LOG_FORMAT: str = "json"
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _parse_cors(cls, v):
