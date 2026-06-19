@@ -24,9 +24,35 @@ async function register(page: Page, email: string, password = 'test-password-123
   await page.getByLabel('邮箱').fill(email);
   await page.getByLabel('密码 (至少 8 位)').fill(password);
   await page.getByRole('button', { name: '注册并登录' }).click();
-  // The auth page disappears once the access token is stored.
-  await expect(page).not.toHaveURL(/.*\/auth/);
-  // Header chip shows the email once we're authed.
+  // Auth.tsx unmounts once status flips to 'authed'; the header chip
+  // showing the email is the canonical "we're in" signal.
+  await expect(page.locator('.auth-user')).toContainText(email);
+}
+
+async function logout(page: Page) {
+  await page
+    .getByRole('button', { name: /退出登录|LogOut/ })
+    .first()
+    .click();
+  // After logout authStatus flips to 'guest' and Auth.tsx remounts. The
+  // "登录" tab button is the canonical signal that we're back at the form.
+  await expect(page.getByRole('button', { name: '登录' }).first()).toBeVisible({
+    timeout: 10_000,
+  });
+}
+
+async function login(page: Page, email: string, password = 'test-password-123') {
+  // Auth.tsx renders by authStatus state, not URL — there is no /auth route.
+  // After logout the Auth form is already mounted on whatever URL we're on,
+  // so don't goto('/') (which would re-trigger bootstrap and briefly swap the
+  // form for a splash spinner). Just wait for the input to be ready.
+  const emailInput = page.getByLabel('邮箱');
+  await emailInput.waitFor({ state: 'visible', timeout: 10_000 });
+  await emailInput.fill(email);
+  await page.getByLabel('密码').fill(password);
+  // Submit button text is "登录" — same as the tab button — so target
+  // by type=submit to disambiguate.
+  await page.locator('button[type="submit"]').click();
   await expect(page.locator('.auth-user')).toContainText(email);
 }
 
@@ -87,14 +113,117 @@ test.describe('Phase 4E smoke', () => {
   test('logout returns to auth page', async ({ page }) => {
     const email = uniqueEmail();
     await register(page, email);
-    await page
-      .getByRole('button', { name: /退出登录|LogOut/ })
-      .first()
-      .click();
-    // Auth page has a tabbed login/register; assert we're back there.
-    await expect(page.getByRole('button', { name: '登录' }).first()).toBeVisible({
+    await logout(page);
+  });
+
+  test('login as existing user after logout', async ({ page }) => {
+    const email = uniqueEmail();
+    await register(page, email);
+    await logout(page);
+    // Now log back in with the same credentials — exercises the login path
+    // (register is the only auth flow the other tests hit).
+    await login(page, email);
+    // Header chip shows the email again.
+    await expect(page.locator('.auth-user')).toContainText(email);
+  });
+
+  test('wrong password stays on auth page', async ({ page }) => {
+    const email = uniqueEmail();
+    await register(page, email);
+    await logout(page);
+    // After logout the Auth form is mounted (authStatus='guest'). Don't
+    // goto('/') which would re-trigger bootstrap and briefly hide the form.
+    const emailInput = page.getByLabel('邮箱');
+    await emailInput.waitFor({ state: 'visible', timeout: 10_000 });
+    await emailInput.fill(email);
+    await page.getByLabel('密码').fill('totally-wrong-password-xxx');
+    await page.locator('button[type="submit"]').click();
+    // Login failed — Auth form stays mounted, submit button still visible.
+    await expect(page.locator('button[type="submit"]')).toBeVisible({
       timeout: 10_000,
     });
+    // No auth-user chip — we never got in.
+    await expect(page.locator('.auth-user')).toHaveCount(0);
+  });
+
+  test('delete datasource removes it from sidebar', async ({ page }) => {
+    const email = uniqueEmail();
+    await register(page, email);
+    await uploadCsv(page, 'to_delete.csv', 'id,name\n1,x\n');
+
+    // Wait for the sidebar to list the uploaded data source. The upload
+    // helper returns once the filename is visible somewhere, but the
+    // sidebar refresh (Sidebar useEffect) runs separately.
+    const dsItem = page.locator('.datasource-item', { hasText: 'to_delete.csv' });
+    await dsItem.first().waitFor({ state: 'visible', timeout: 15_000 });
+
+    // The delete button uses window.confirm() — a native browser dialog.
+    // Playwright auto-dismisses these unless we register a handler.
+    page.once('dialog', (d) => void d.accept());
+
+    // Click the delete button (class ds-row-action-danger — the trash icon).
+    await dsItem.first().locator('.ds-row-action-danger').click();
+
+    // The data source should disappear from the sidebar list.
+    await expect(page.locator('.datasource-item', { hasText: 'to_delete.csv' })).toHaveCount(0, {
+      timeout: 10_000,
+    });
+  });
+
+  test('pagination next page loads more rows', async ({ page }) => {
+    const email = uniqueEmail();
+    await register(page, email);
+    // 25 rows so the default 20-per-page leaves 5 on page 2.
+    let csv = 'id,name,amount\n';
+    for (let i = 0; i < 25; i++) {
+      csv += `${i},user${i},${i * 10}\n`;
+    }
+    await uploadCsv(page, 'paginated.csv', csv);
+
+    await page.getByRole('button', { name: '分析', exact: true }).click();
+    await expect(page.getByText(/Schema|字段概览/)).toBeVisible({ timeout: 15_000 });
+    // Footer shows "1–20 / 共 25 行" on page 1.
+    await expect(page.getByText(/1[–-]20.*25/)).toBeVisible({ timeout: 10_000 });
+
+    // Click "下一页" / "Next" to advance.
+    await page.getByRole('button', { name: /下一页|next/i }).click();
+    // Page 2 footer: "21–25 / 共 25 行".
+    await expect(page.getByText(/21[–-]25.*25/)).toBeVisible({ timeout: 10_000 });
+  });
+
+  test('rename datasource updates sidebar label', async ({ page }) => {
+    const email = uniqueEmail();
+    await register(page, email);
+    await uploadCsv(page, 'rename_me.csv', 'id,name\n1,x\n');
+
+    // Wait for the sidebar to list the uploaded data source.
+    const dsItem = page.locator('.datasource-item', { hasText: 'rename_me.csv' });
+    await dsItem.first().waitFor({ state: 'visible', timeout: 15_000 });
+
+    // Action buttons after .datasource-item-main are, in order:
+    // attach (CheckCircle2 — a span when active, button when not),
+    // rename (Pencil), lineage (History), delete (Trash2).
+    // The rename button is the ds-row-action with title containing "重命名".
+    // Use CSS nth(1) — the 2nd ds-row-action (attach is 0th).
+    const renameBtn = dsItem.first().locator('.ds-row-action').nth(1);
+    await renameBtn.click();
+
+    // Inline input with class ds-rename-input appears; fill + Enter to save.
+    const input = dsItem.first().locator('.ds-rename-input');
+    await input.waitFor({ state: 'visible', timeout: 5_000 });
+    await input.fill('我的销售数据');
+    await input.press('Enter');
+
+    // The renamed label appears in the sidebar list (span.ds-name inside
+    // .datasource-item-main). Scope to the list to avoid matching the
+    // current-datasource header which also shows the active source's name.
+    await expect(
+      page.locator('.datasource-item .ds-name', { hasText: '我的销售数据' }),
+    ).toBeVisible({ timeout: 10_000 });
+    // Original filename no longer appears as a primary label in the list.
+    await expect(
+      page.locator('.datasource-item .ds-name', { hasText: 'rename_me.csv' }),
+    ).toHaveCount(0);
   });
 
   test('ACL: another user cannot see my data source', async ({ browser }) => {
@@ -114,8 +243,8 @@ test.describe('Phase 4E smoke', () => {
     const pageB = await browser.newPage();
     const emailB = uniqueEmail();
     await register(pageB, emailB);
-    // Sidebar's "no data sources" empty state.
-    await expect(pageB.getByText(/No data source|没有数据源|尚未/).first()).toBeVisible({
+    // Sidebar's "no data sources" empty state. zh: "暂无历史数据源", en: "No data sources yet".
+    await expect(pageB.getByText(/No data sources yet|暂无历史数据源/).first()).toBeVisible({
       timeout: 10_000,
     });
     await pageA.close();
