@@ -5,3 +5,8 @@ build
 *.min.js
 *.min.css
 package-lock.json
+
+# Local E2E / build artifacts — gitignored, shouldn't be linted
+.e2e-data
+test-results
+playwright-report

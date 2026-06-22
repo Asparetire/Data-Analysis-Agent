@@ -13,3 +13,7 @@ fakeredis>=2.21
 ruff>=0.6
 black>=24.0
 pre-commit>=3.8
+
+# Phase 5D: docs site
+mkdocs>=1.6.0
+mkdocs-material>=9.5.0

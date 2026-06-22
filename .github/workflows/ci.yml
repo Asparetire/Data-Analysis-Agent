@@ -46,6 +46,12 @@ jobs:
       - name: Pytest
         run: pytest
 
+      - name: MkDocs build (strict)
+        # Catch broken nav links / missing pages / syntax errors in docs
+        # before they ship. --strict turns warnings into failures.
+        run: mkdocs build --strict
+        working-directory: docs
+
   frontend:
     name: Frontend (Node 20)
     runs-on: ubuntu-latest
@@ -142,3 +148,33 @@ jobs:
           name: playwright-report
           path: frontend/playwright-report/
           retention-days: 7
+
+  docker-build:
+    name: Docker (build only)
+    runs-on: ubuntu-latest
+    # Verify the multi-stage Dockerfiles still build — doesn't push.
+    # Catches broken COPY paths, base image regressions, layer cache
+    # issues before they hit a deploy.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build frontend (nginx) image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          push: false
+          load: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

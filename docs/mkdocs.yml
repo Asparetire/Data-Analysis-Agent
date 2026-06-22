@@ -1,0 +1,55 @@
+site_name: Data Analysis Agent
+site_description: 上传 CSV/Excel，自然语言提问，LangGraph Agent 自动生成 SQL 查询数据并回答
+site_url: https://github.com/Asparetire/Data-Analysis-Agent
+repo_url: https://github.com/Asparetire/Data-Analysis-Agent
+repo_name: Asparetire/Data-Analysis-Agent
+
+theme:
+  name: material
+  language: zh
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换暗色
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换亮色
+
+nav:
+  - 首页: index.md
+  - 用户手册: user-manual.md
+  - API: api.md
+  - 架构: architecture.md
+  - 部署: deployment.md
+  - 性能基线: performance-baseline.md
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search

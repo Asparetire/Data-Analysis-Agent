@@ -61,3 +61,4 @@ frontend/.e2e-data/
 frontend/test-results/
 frontend/playwright-report/
 frontend/playwright/.cache/
+docs/site/

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sse_starlette.sse import EventSourceResponse
+from starlette.responses import JSONResponse
 
 from ..config import settings
 from ..models.schemas import (
@@ -30,13 +32,29 @@ from .dependencies import current_user
 logger = get_logger(__name__)
 router = APIRouter()
 
+# Phase 5C: process start time for /health/ready. Captured at module import
+# (≈ process start) so uptime_seconds reflects the real lifetime.
+_started_at = time.monotonic()
+
+
+def _get_app_version() -> str:
+    """Read the FastAPI app version, deferring the import to avoid a
+    circular load (main.py imports routes.py, so we can't import main at
+    module top here)."""
+    try:
+        from ..main import app as _app
+
+        return _app.version
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
 
 # ---------------------------------------------------------------------------
 # Upload
 # ---------------------------------------------------------------------------
 
 
-@router.post("/upload", response_model=UploadResponse)
+@router.post("/upload", response_model=UploadResponse, tags=["datasources"])
 async def upload_file(
     file: UploadFile = File(...),
     user: dict = Depends(current_user),
@@ -56,6 +74,17 @@ async def upload_file(
     except Exception:  # noqa: BLE001
         logger.warning("failed to stamp owner on %s", file_id, exc_info=True)
 
+    # Persist the original filename as the display name so /datasources
+    # returns "sales.csv" instead of the on-disk "{uuid}.csv". Without
+    # this the sidebar shows UUIDs — the upload id stem is meaningless
+    # to users.
+    original_name = file.filename or ""
+    if original_name:
+        try:
+            metadata_service.set_display_name(file_id, original_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to set display name on %s", file_id, exc_info=True)
+
     return UploadResponse(
         file_id=file_id,
         filename=file.filename or "",
@@ -69,7 +98,7 @@ async def upload_file(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/chat", response_model=ChatResponse)
+@router.post("/chat", response_model=ChatResponse, tags=["chat"])
 async def chat_endpoint(request: ChatRequest, user: dict = Depends(current_user)):
     try:
         return await chat_service.run_chat(
@@ -90,7 +119,7 @@ async def chat_endpoint(request: ChatRequest, user: dict = Depends(current_user)
         raise HTTPException(status_code=500, detail=f"Chat failed: {e}") from e
 
 
-@router.post("/chat/stream")
+@router.post("/chat/stream", tags=["chat"])
 async def chat_stream_endpoint(request: ChatRequest, user: dict = Depends(current_user)):
     """SSE endpoint for a single chat turn.
 
@@ -157,7 +186,7 @@ def _check_datasource_owner(data_source_id: str, user: dict) -> None:
         raise HTTPException(status_code=404, detail="Data source not found")
 
 
-@router.get("/datasources", response_model=list[DataSource])
+@router.get("/datasources", response_model=list[DataSource], tags=["datasources"])
 async def get_datasources(user: dict = Depends(current_user)):
     """List only the data sources owned by the current user."""
     uploads_dir = Path(settings.DATA_DIR) / "uploads"
@@ -187,7 +216,7 @@ async def get_datasources(user: dict = Depends(current_user)):
     return items
 
 
-@router.patch("/datasources/{data_source_id}", response_model=DataSource)
+@router.patch("/datasources/{data_source_id}", response_model=DataSource, tags=["datasources"])
 async def rename_datasource(
     data_source_id: str,
     body: DataSourceRename,
@@ -223,7 +252,7 @@ async def rename_datasource(
     )
 
 
-@router.get("/datasources/{data_source_id}/preview")
+@router.get("/datasources/{data_source_id}/preview", tags=["datasources"])
 async def preview_datasource(
     data_source_id: str,
     limit: int = 5,
@@ -238,7 +267,7 @@ async def preview_datasource(
     return {"rows": rows, "count": len(rows)}
 
 
-@router.get("/datasources/{data_source_id}/schema")
+@router.get("/datasources/{data_source_id}/schema", tags=["datasources"])
 async def schema_datasource(
     data_source_id: str,
     table: str | None = None,
@@ -255,7 +284,7 @@ async def schema_datasource(
     return {"schema": schema}
 
 
-@router.get("/datasources/{data_source_id}/rows")
+@router.get("/datasources/{data_source_id}/rows", tags=["datasources"])
 async def rows_datasource(
     data_source_id: str,
     table: str | None = None,
@@ -296,7 +325,7 @@ async def rows_datasource(
     return payload
 
 
-@router.get("/datasources/{data_source_id}/tables")
+@router.get("/datasources/{data_source_id}/tables", tags=["datasources"])
 async def tables_datasource(
     data_source_id: str,
     user: dict = Depends(current_user),
@@ -316,7 +345,9 @@ async def tables_datasource(
     return {"tables": out}
 
 
-@router.get("/datasources/{data_source_id}/lineage", response_model=LineageResponse)
+@router.get(
+    "/datasources/{data_source_id}/lineage", response_model=LineageResponse, tags=["datasources"]
+)
 async def lineage_datasource(
     data_source_id: str,
     limit: int = 50,
@@ -339,7 +370,7 @@ async def lineage_datasource(
     )
 
 
-@router.delete("/datasources/{data_source_id}")
+@router.delete("/datasources/{data_source_id}", tags=["datasources"])
 async def delete_datasource(
     data_source_id: str,
     user: dict = Depends(current_user),
@@ -391,7 +422,7 @@ def _check_session_owner(session: dict, user: dict) -> None:
         raise HTTPException(status_code=404, detail="Session not found or expired")
 
 
-@router.get("/sessions/{session_id}", response_model=SessionView)
+@router.get("/sessions/{session_id}", response_model=SessionView, tags=["sessions"])
 async def get_session(session_id: str, user: dict = Depends(current_user)):
     session = await session_service.get_session(session_id)
     if session is None:
@@ -411,7 +442,7 @@ async def get_session(session_id: str, user: dict = Depends(current_user)):
     )
 
 
-@router.post("/sessions", response_model=SessionCreateResponse, status_code=201)
+@router.post("/sessions", response_model=SessionCreateResponse, status_code=201, tags=["sessions"])
 async def create_session(user: dict = Depends(current_user)):
     session_id = await session_service.create_session(owner_id=user["id"])
     session = await session_service.get_session(session_id)
@@ -429,7 +460,7 @@ async def create_session(user: dict = Depends(current_user)):
     )
 
 
-@router.patch("/sessions/{session_id}", response_model=SessionView)
+@router.patch("/sessions/{session_id}", response_model=SessionView, tags=["sessions"])
 async def update_session(
     session_id: str,
     body: SessionUpdate,
@@ -458,7 +489,7 @@ async def update_session(
     )
 
 
-@router.delete("/sessions/{session_id}", status_code=204)
+@router.delete("/sessions/{session_id}", status_code=204, tags=["sessions"])
 async def delete_session(session_id: str, user: dict = Depends(current_user)):
     session = await session_service.get_session(session_id)
     if session is None:
@@ -470,11 +501,55 @@ async def delete_session(session_id: str, user: dict = Depends(current_user)):
     return None
 
 
-@router.get("/health")
-async def health_check():
-    """Health check stays public — load balancers and uptime monitors need it."""
+@router.get("/health/live", tags=["system"])
+async def health_live():
+    """Liveness — process is up and the event loop is turning.
+
+    No dependency checks. Use this for K8s liveness probes / load balancer
+    health: if the process can't answer this, the orchestrator should
+    restart it.
+    """
+    return {"status": "alive"}
+
+
+@router.get("/health/ready", tags=["system"])
+async def health_ready():
+    """Readiness — process can serve real traffic (Redis + main DB reachable).
+
+    Returns 503 if any dependency is down so the load balancer pulls this
+    instance out of rotation without restarting it. K8s readiness probe.
+    """
+    from sqlalchemy import text
+
+    from ..utils.database import get_engine
+
     redis_ok = await session_service.ping()
-    return {
-        "status": "ok" if redis_ok else "degraded",
-        "redis": redis_ok,
-    }
+    db_ok = True
+    try:
+        engine = get_engine(None)
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+    except Exception:  # noqa: BLE001
+        db_ok = False
+
+    ok = redis_ok and db_ok
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={
+            "status": "ok" if ok else "degraded",
+            "redis": redis_ok,
+            "db": db_ok,
+            "version": _get_app_version(),
+            "uptime_seconds": round(time.monotonic() - _started_at, 3),
+        },
+    )
+
+
+@router.get("/health", tags=["system"])
+async def health_check():
+    """Backward-compat alias for /health/ready.
+
+    Pre-Phase 5 monitors hit /health; keep it working. The body matches
+    /health/ready so callers don't need to change their parser.
+    """
+    return await health_ready()

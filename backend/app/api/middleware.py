@@ -15,6 +15,8 @@ whole API. We log the failure so it's visible.
 
 from __future__ import annotations
 
+import uuid
+
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -23,6 +25,7 @@ from ..config import settings
 from ..services import auth_service, session_service
 from ..utils.logger import get_logger
 from ..utils.rate_limit import WINDOW_S, check_rate_limit
+from ..utils.request_id import request_id_ctx
 
 logger = get_logger(__name__)
 
@@ -92,3 +95,28 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 headers={"Retry-After": str(WINDOW_S)},
             )
         return await call_next(request)
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Assign a request_id per request and propagate it everywhere.
+
+    Reads ``X-Request-ID`` from the incoming request (set by nginx or by
+    an upstream caller); generates a UUID4 otherwise. The id is:
+      - stored in a ContextVar so log records carry it (see logger.py)
+      - echoed back in the ``X-Request-ID`` response header so clients can
+        correlate a failing response to a server log line
+
+    Registered AFTER RateLimitMiddleware so rate-limit 429s still get a
+    request_id in their log line — the outermost middleware sees every
+    request first.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        rid = request.headers.get("x-request-id") or uuid.uuid4().hex
+        token = request_id_ctx.set(rid)
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-ID"] = rid
+            return response
+        finally:
+            request_id_ctx.reset(token)
