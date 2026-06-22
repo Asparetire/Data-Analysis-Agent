@@ -37,9 +37,10 @@
 | 方法 | 路径 | 用途 |
 |------|------|------|
 | POST | `/sessions` | 创建新会话，返回 session_id 和初始 payload |
+| GET  | `/sessions` | Phase 6: 列出当前用户的所有活跃会话（含 chat_history 预览） |
 | GET  | `/sessions/{id}` | 读取会话（含 `ttl_seconds`） |
 | PATCH| `/sessions/{id}` | 合并更新字段，重置 TTL |
-| DELETE| `/sessions/{id}` | 显式删除会话 |
+| DELETE| `/sessions/{id}` | 显式删除会话（同时从用户索引移除） |
 | POST | `/chat` | 同步发送消息，返回完整响应 |
 | POST | `/chat/stream` | SSE 流式发送 |
 
@@ -90,3 +91,28 @@ data: {"code": 500, "message": "..."}
 | `/chat`、`/chat/stream`、`/upload` | user | 60 |
 
 超限返回 `429` + `Retry-After` header。Redis 故障时 fail open（不锁死 API）。
+
+## Phase 6: 并发与超时
+
+| 端点 / 资源 | 限制 | 配置项 | 默认 |
+|------|------|------|------|
+| `/chat/stream` 并发流 | per-user | `MAX_CONCURRENT_SSE_PER_USER` | 5 |
+| LLM 单次调用 | wall-clock | `LLM_REQUEST_TIMEOUT_S` | 60s |
+| 查询缓存 | 单条最大 payload | （硬编码） | 256 KB |
+| `/metrics` 抓取 | CIDR allowlist | nginx `METRICS_ALLOW_CIDR` | `127.0.0.1/32` |
+
+并发流超限返回 SSE `error` 事件（code 429），LLM 超时抛 `TimeoutError` 并
+以 `error` 事件形式回传。
+
+## Phase 6: Prometheus 指标
+
+`/metrics` 除默认 HTTP 指标外还暴露：
+
+| 指标 | 类型 | 标签 | 含义 |
+|------|------|------|------|
+| `llm_calls_total` | counter | `provider`, `status` | LLM 调用次数（ok / error） |
+| `llm_call_duration_seconds` | histogram | `provider` | LLM 调用 wall-clock 时长 |
+| `llm_tokens_used_total` | counter | `provider`, `kind` | prompt / completion token 数 |
+| `query_cache_hits_total` / `query_cache_misses_total` | counter | - | 查询缓存命中率 |
+| `sse_active_streams` | gauge | - | 当前活跃 SSE 连接数 |
+| `sse_rejected_total` | counter | - | 因并发上限被拒的 SSE 请求数 |
