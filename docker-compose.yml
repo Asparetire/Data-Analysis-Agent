@@ -27,6 +27,13 @@ services:
       - RATE_LIMIT_PER_IP_PER_MINUTE=${RATE_LIMIT_PER_IP_PER_MINUTE:-20}
       # Phase 5B: observability
       - LOG_FORMAT=${LOG_FORMAT:-json}
+      # Phase 6: trust the nginx container (and the compose bridge network)
+      # as a proxy so X-Forwarded-For is honored for per-IP rate limiting.
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      # Phase 6: per-user concurrent SSE cap
+      - MAX_CONCURRENT_SSE_PER_USER=${MAX_CONCURRENT_SSE_PER_USER:-5}
+      # Phase 6: LLM call timeout
+      - LLM_REQUEST_TIMEOUT_S=${LLM_REQUEST_TIMEOUT_S:-60.0}
       # Infra
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=sqlite:///app/data/main.db
@@ -46,6 +53,10 @@ services:
       dockerfile: Dockerfile
     ports:
       - "80:80"
+    environment:
+      # CIDR allowed to scrape /metrics. Default loopback — production
+      # deployments override this with the Prometheus scraper's IP/CIDR.
+      - METRICS_ALLOW_CIDR=${METRICS_ALLOW_CIDR:-127.0.0.1/32}
     depends_on:
       - backend
 

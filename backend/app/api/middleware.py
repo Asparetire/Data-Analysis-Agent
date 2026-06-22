@@ -15,6 +15,7 @@ whole API. We log the failure so it's visible.
 
 from __future__ import annotations
 
+import ipaddress
 import uuid
 
 from fastapi import Request
@@ -28,6 +29,37 @@ from ..utils.rate_limit import WINDOW_S, check_rate_limit
 from ..utils.request_id import request_id_ctx
 
 logger = get_logger(__name__)
+
+
+def _trusted_proxies() -> set[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Parse TRUSTED_PROXIES (comma-separated IPs/CIDRs) into a set of networks.
+
+    Entries that don't parse are logged and skipped. Returns a set of
+    *addresses* — for CIDR matching we keep a parallel list of networks.
+    """
+    nets: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for token in (settings.TRUSTED_PROXIES or "").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            nets.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            logger.warning("ignoring unparseable TRUSTED_PROXIES entry %r", token)
+    return nets  # type: ignore[return-value]
+
+
+_TRUSTED_PROXY_NETS = _trusted_proxies()
+
+
+def _peer_is_trusted(peer: str | None) -> bool:
+    if not peer:
+        return False
+    try:
+        addr = ipaddress.ip_address(peer)
+    except ValueError:
+        return False
+    return any(addr in net for net in _TRUSTED_PROXY_NETS)
 
 
 def _route_limit(path: str) -> int | None:
@@ -50,12 +82,17 @@ def _route_limit(path: str) -> int | None:
 
 
 def _client_ip(request: Request) -> str:
-    # Honour the first hop in X-Forwarded-For if present (behind a proxy).
-    # Fall back to the direct peer; tests that hit TestClient have .client.
-    xff = request.headers.get("x-forwarded-for", "")
-    if xff:
-        return xff.split(",", 1)[0].strip()
-    return (request.client.host if request.client else "unknown") or "unknown"
+    # Honour the first hop in X-Forwarded-For ONLY when the direct peer is a
+    # trusted proxy (configured via TRUSTED_PROXIES). Without this gate, any
+    # client that connects directly to the backend (e.g. when the dev runs
+    # `uvicorn app.main:app --port 8000` without nginx in front) could
+    # spoof XFF and bypass the per-IP rate limit on /auth/login.
+    peer = request.client.host if request.client else None
+    if _peer_is_trusted(peer):
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",", 1)[0].strip()
+    return peer or "unknown"
 
 
 def _extract_user_id(request: Request) -> str | None:

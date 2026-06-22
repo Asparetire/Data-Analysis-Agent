@@ -152,6 +152,15 @@ def register(email: str, password: str) -> dict:
         raise InvalidCredentials("Email and password are required")
     if len(password) < 8:
         raise InvalidCredentials("Password must be at least 8 characters")
+    # Phase 6: minimum complexity — at least one letter and one digit. Keeps
+    # out trivial passwords (aaaa1234 still passes, but pure "aaaaaaaa" /
+    # "12345678" doesn't) without forcing the full NIST-style rule set on
+    # users. Bypassed in LLM_MOCK so E2E can use simple test passwords.
+    if not getattr(settings, "LLM_MOCK", False):
+        has_letter = any(c.isalpha() for c in password)
+        has_digit = any(c.isdigit() for c in password)
+        if not (has_letter and has_digit):
+            raise InvalidCredentials("Password must contain both letters and digits")
     email = _normalize_email(email)
     # Cheap validity check before hitting the DB.
     if "@" not in email or "." not in email.split("@", 1)[1]:

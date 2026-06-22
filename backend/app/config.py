@@ -74,6 +74,18 @@ class Settings(BaseSettings):
     RATE_LIMIT_PER_USER_PER_MINUTE: int = 60
     RATE_LIMIT_PER_IP_PER_MINUTE: int = 20
 
+    # Phase 6: 并发 SSE 上限（per-user）。每个 /chat/stream 长连接算一路。
+    MAX_CONCURRENT_SSE_PER_USER: int = 5
+
+    # Phase 6: 信任的反代 IP / CIDR 列表（逗号分隔）。
+    # 仅当对端 IP 命中此列表时才认 X-Forwarded-For，否则直接用 socket peer，
+    # 防止直连场景下用户自设 XFF 绕过 per-IP 限流。
+    # 本地 dev 默认信任 loopback；生产部署在 .env 显式列出 nginx/LB 的 IP。
+    TRUSTED_PROXIES: str = "127.0.0.1,::1"
+
+    # Phase 6: LLM 单次调用超时（秒）。超时抛错，避免请求挂在 provider 侧。
+    LLM_REQUEST_TIMEOUT_S: float = 60.0
+
     # Phase 5B: 日志格式 "json"（生产，方便 ELK/Loki 摄入）或 "text"（本地可读）
     LOG_FORMAT: str = "json"
 
@@ -103,6 +115,7 @@ class Settings(BaseSettings):
 
 
 _DEV_DEFAULT_JWT_SECRET = "dev-only-change-me-in-prod"
+_DEV_DEFAULT_ADMIN_PASSWORD = "change-me-now"
 
 
 def _check_required_at_startup() -> None:
@@ -141,6 +154,24 @@ def _validate_jwt_secret() -> None:
         )
 
 
+def _validate_migration_admin_password() -> None:
+    """Refuse to boot with the placeholder migration admin password.
+
+    If the env var isn't overridden and main.db has ownerless data, the
+    startup migration will create a real admin account with this password —
+    so a forgotten env var in production hands attackers a known credential.
+    """
+    pwd = settings.MIGRATION_ADMIN_PASSWORD
+    if pwd == _DEV_DEFAULT_ADMIN_PASSWORD or len(pwd) < 12:
+        if getattr(settings, "LLM_MOCK", False) or os.getenv("JWT_SECRET_DEV_OK"):
+            return
+        raise RuntimeError(
+            "MIGRATION_ADMIN_PASSWORD is the committed placeholder or shorter than 12 bytes. "
+            "Set a strong random string in .env (or JWT_SECRET_DEV_OK=1 for local dev)."
+        )
+
+
 settings = Settings()
 _check_required_at_startup()
 _validate_jwt_secret()
+_validate_migration_admin_password()
