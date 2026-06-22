@@ -54,7 +54,7 @@ app.add_middleware(RequestIdMiddleware)
 # Instrumentator().add(...) if needed. The endpoint is unauthenticated
 # so Prometheus can scrape without credentials — restrict at the nginx
 # layer in production (allow only the scraper's IP).
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
+Instrumentator().instrument(app).expose(app, endpoint="/metrics", tags=["system"])
 
 # 注册路由
 app.include_router(router, prefix=settings.API_V1_STR)
@@ -78,6 +78,6 @@ async def _startup() -> None:
     logger.info("auth tables initialized; migration complete")
 
 
-@app.get("/")
+@app.get("/", tags=["system"])
 async def root():
     return {"message": "Data Analysis Agent API"}

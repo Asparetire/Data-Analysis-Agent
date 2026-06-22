@@ -77,6 +77,17 @@ class Settings(BaseSettings):
     # Phase 5B: 日志格式 "json"（生产，方便 ELK/Loki 摄入）或 "text"（本地可读）
     LOG_FORMAT: str = "json"
 
+    # Phase 5C: MinIO 备份目标。backup.py 读这些值；生产环境必填，
+    # 本地不跑备份时可留空（脚本会因 MINIO_ENDPOINT 缺失而退出 2）。
+    MINIO_ENDPOINT: str = ""
+    MINIO_ACCESS_KEY: str = ""
+    MINIO_SECRET_KEY: str = ""
+    MINIO_BUCKET: str = "data-analysis-backups"
+    BACKUP_RETENTION_DAYS: int = 7
+    # Redis dump.rdb 的绝对路径。backup.py 默认用 CONFIG GET 探测；
+    # 若 Redis 禁用了 CONFIG 命令（生产加固常见），在此显式指定。
+    REDIS_DUMP_PATH: str | None = None
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def _parse_cors(cls, v):

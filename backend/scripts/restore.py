@@ -7,27 +7,34 @@ This does NOT stop the backend for you — running it while the backend
 holds the SQLite file open will leave the DB in a torn state. Stop
 the backend first, run restore, restart.
 
-Env: same as backup.py (MINIO_*, DATABASE_URL, REDIS_URL).
+Config comes from app.config.settings (same as backup.py and the backend).
 """
 
 from __future__ import annotations
 
 import argparse
-import os
+import json
 import shutil
 import sys
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 
 import boto3
 from botocore.client import Config as BotoConfig
 from sqlalchemy.engine.url import make_url
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from app.config import settings  # noqa: E402
 
-def _log(msg: str, **kw) -> None:
-    import json
 
-    payload = {"logger": "restore", "message": msg}
+def _log(msg: str, level: str = "info", **kw) -> None:
+    payload = {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "level": level,
+        "logger": "restore",
+        "message": msg,
+    }
     payload.update(kw)
     print(json.dumps(payload, ensure_ascii=False), flush=True)
 
@@ -35,9 +42,9 @@ def _log(msg: str, **kw) -> None:
 def _s3_client():
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["MINIO_ENDPOINT"],
-        aws_access_key_id=os.environ["MINIO_ACCESS_KEY"],
-        aws_secret_access_key=os.environ["MINIO_SECRET_KEY"],
+        endpoint_url=settings.MINIO_ENDPOINT,
+        aws_access_key_id=settings.MINIO_ACCESS_KEY,
+        aws_secret_access_key=settings.MINIO_SECRET_KEY,
         config=BotoConfig(signature_version="s3v4", s3={"addressing_style": "path"}),
         region_name="us-east-1",
     )
@@ -67,13 +74,11 @@ def _main_db_path(db_url: str) -> Path:
     return p if p.is_absolute() else Path.cwd() / p
 
 
-def _redis_dump_path(redis_url: str) -> Path:
-    """Default redis dump path. Caller can override via REDIS_DUMP_PATH env."""
-    env_path = os.environ.get("REDIS_DUMP_PATH")
-    if env_path:
-        return Path(env_path)
-    # Standard redis: /data/dump.rdb (matches the official redis:7-alpine
-    # container and our docker-compose redis_data volume mount).
+def _redis_dump_path() -> Path:
+    """Resolve the redis dump.rdb path: explicit REDIS_DUMP_PATH, else default."""
+    if settings.REDIS_DUMP_PATH:
+        return Path(settings.REDIS_DUMP_PATH)
+    # redis:7-alpine default + our compose volume mount.
     return Path("/data/dump.rdb")
 
 
@@ -82,25 +87,29 @@ def main() -> int:
     parser.add_argument("--yes", action="store_true", help="skip confirmation prompt")
     args = parser.parse_args()
 
-    required = ["MINIO_ENDPOINT", "MINIO_ACCESS_KEY", "MINIO_SECRET_KEY", "MINIO_BUCKET"]
-    missing = [k for k in required if not os.environ.get(k)]
+    missing = [
+        k
+        for k, v in {
+            "MINIO_ENDPOINT": settings.MINIO_ENDPOINT,
+            "MINIO_ACCESS_KEY": settings.MINIO_ACCESS_KEY,
+            "MINIO_SECRET_KEY": settings.MINIO_SECRET_KEY,
+            "MINIO_BUCKET": settings.MINIO_BUCKET,
+        }.items()
+        if not v
+    ]
     if missing:
-        _log("missing required env", keys=missing)
+        _log("missing required config", level="error", keys=missing)
         return 2
 
-    db_url = os.environ.get("DATABASE_URL", "sqlite:///./data/main.db")
-    redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-    bucket = os.environ["MINIO_BUCKET"]
-
     s3 = _s3_client()
-    db_key, rdb_key = _latest_keys(s3, bucket)
+    db_key, rdb_key = _latest_keys(s3, settings.MINIO_BUCKET)
     _log("latest backup", db_key=db_key, rdb_key=rdb_key)
 
     if not args.yes:
         print(
             f"\n  About to OVERWRITE:\n"
-            f"    {_main_db_path(db_url)}  <-  {db_key}\n"
-            f"    {_redis_dump_path(redis_url)}  <-  {rdb_key}\n"
+            f"    {_main_db_path(settings.DATABASE_URL)}  <-  {db_key}\n"
+            f"    {_redis_dump_path()}  <-  {rdb_key}\n"
             f"\n  Stop the backend + redis first. Continue? [y/N] ",
             file=sys.stderr,
             flush=True,
@@ -113,15 +122,15 @@ def main() -> int:
         tmp = Path(tmpdir)
         db_local = tmp / "main.db"
         rdb_local = tmp / "dump.rdb"
-        s3.download_file(bucket, db_key, str(db_local))
-        s3.download_file(bucket, rdb_key, str(rdb_local))
+        s3.download_file(settings.MINIO_BUCKET, db_key, str(db_local))
+        s3.download_file(settings.MINIO_BUCKET, rdb_key, str(rdb_local))
 
-        db_target = _main_db_path(db_url)
+        db_target = _main_db_path(settings.DATABASE_URL)
         db_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(db_local, db_target)
         _log("restored db", target=str(db_target))
 
-        rdb_target = _redis_dump_path(redis_url)
+        rdb_target = _redis_dump_path()
         rdb_target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(rdb_local, rdb_target)
         _log("restored redis dump", target=str(rdb_target))

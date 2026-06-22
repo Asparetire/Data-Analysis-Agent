@@ -104,6 +104,31 @@ services:
       # Don't start on `docker compose up` — only on explicit `--profile backup`.
       - backup
 
+  # One-shot restore runner. Triggered manually:
+  #   docker compose run --rm restore            # interactive confirm
+  #   docker compose run --rm restore -- --yes   # skip confirm (CI/automation)
+  # Stops the backend first (data files are locked while uvicorn holds them).
+  restore:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: python scripts/restore.py
+    environment:
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      - MINIO_BUCKET=${MINIO_BUCKET:-data-analysis-backups}
+    volumes:
+      - backend_data:/app/data
+      - redis_data:/data
+    depends_on:
+      - redis
+      - minio
+    profiles:
+      - backup
+
 volumes:
   backend_data:
   redis_data:
