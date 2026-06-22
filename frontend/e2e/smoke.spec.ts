@@ -75,13 +75,18 @@ async function uploadCsv(page: Page, filename: string, rows: string) {
   await expect(page.getByText(filename, { exact: true })).toBeVisible({
     timeout: 15_000,
   });
-  // The sidebar's getDataSources refresh (triggered by uploadedFileName
-  // changing in the store) runs asynchronously after the upload succeeds.
-  // Wait for the data source to appear in the sidebar list before
-  // returning, so callers can immediately interact with it (delete,
-  // rename, etc.) without racing the refresh.
-  await expect(page.locator('.datasource-item', { hasText: filename })).toBeVisible({
-    timeout: 15_000,
+}
+
+/** Wait for a data source to appear in the sidebar list.
+ *
+ * The sidebar's getDataSources refresh (Sidebar useEffect on uploadedFileName)
+ * is asynchronous — callers that need to interact with a just-uploaded source
+ * in the sidebar should wait through this helper instead of assuming the
+ * upload response means the sidebar has caught up.
+ */
+async function waitForSidebarItem(page: Page, filename: string, timeout = 15_000) {
+  await expect(page.locator('.datasource-item', { hasText: filename }).first()).toBeVisible({
+    timeout,
   });
 }
 
