@@ -67,7 +67,10 @@ async def test_get_table_info_uses_sidecar_row_count(tmp_data_dir, make_upload, 
     upload = make_upload("cached.csv", b"x\n1\n2\n")
     await data_service.save_uploaded_file(upload, "ds-cached")
 
-    # Make COUNT(*) blow up — if get_table_info tries to run it, the test fails.
+    # Patch COUNT(*) to blow up — if get_table_info tries to run it, the test
+    # fails. We pass table="uploaded_data" explicitly so get_primary_table
+    # (which calls list_tables → sqlite_master) isn't invoked; otherwise the
+    # mock would intercept that query too and return garbage.
 
     class _Result:
         def __init__(self, rows):
@@ -99,6 +102,6 @@ async def test_get_table_info_uses_sidecar_row_count(tmp_data_dir, make_upload, 
 
     monkeypatch.setattr(database.get_engine("ds-cached"), "connect", _patched_connect)
 
-    info = data_service.get_table_info("ds-cached")
+    info = data_service.get_table_info("ds-cached", table="uploaded_data")
     assert info is not None
     assert info["row_count"] == 2

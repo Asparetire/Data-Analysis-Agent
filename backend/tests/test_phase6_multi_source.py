@@ -93,12 +93,14 @@ async def test_query_database_cross_source_join(tmp_data_dir, make_upload):
     payload = json.loads(raw)
     assert "error" not in payload, payload
     # INNER JOIN drops Carol (customer_id=3 has no orders). Bob has the
-    # highest total (200), Alice second (100 + 50 = 150).
+    # highest total (200), Alice second (100 + 50 = 150). query_database
+    # stringifies all values (Layer 2 masking runs on str-typed cells), so
+    # totals come back as strings.
     assert payload["row_count"] == 2
     names = [r["name"] for r in payload["rows"]]
     assert names == ["Bob", "Alice"]
     assert payload["rows"][0]["name"] == "Bob"
-    assert payload["rows"][0]["total"] == 200
+    assert payload["rows"][0]["total"] == "200"
 
 
 # ---------------------------------------------------------------------------
