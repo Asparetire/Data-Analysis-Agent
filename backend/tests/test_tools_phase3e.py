@@ -29,7 +29,9 @@ def _find(tool_list, name: str):
 
 @pytest.fixture
 def fresh_query_cache(monkeypatch):
-    cache = query_cache.QueryCache(ttl_seconds=60.0, max_entries=32)
+    # Phase 6: production cache is Redis-backed; tests use the in-process
+    # fallback so they don't need a real Redis. The interface is identical.
+    cache = query_cache.InProcessQueryCache(ttl_seconds=60.0, max_entries=32)
     query_cache.set_cache(cache)
     yield cache
     query_cache.set_cache(None)
