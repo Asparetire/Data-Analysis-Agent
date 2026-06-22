@@ -35,6 +35,17 @@ def _key(session_id: str) -> str:
     return f"{SESSION_KEY_PREFIX}{session_id}"
 
 
+def _user_index_key(user_id: str) -> str:
+    """Phase 6: Redis SET key tracking all sessions owned by a user.
+
+    We SADD on create, SREM on delete, and SMEMBERS for the list endpoint.
+    The SET has no TTL — orphaned ids (sessions that expired via setex TTL
+    but weren't explicitly deleted) are filtered out lazily by the list
+    endpoint (it GETs each id and drops the ones that come back None).
+    """
+    return f"user_sessions:{user_id}"
+
+
 def _empty_session(session_id: str, owner_id: str | None = None) -> dict[str, Any]:
     now = _utcnow()
     return {
@@ -84,10 +95,21 @@ async def create_session(owner_id: str | None = None) -> str:
     Phase 4A: ``owner_id`` is stamped at creation so subsequent reads can
     enforce ACL. Sessions created without an owner (legacy callers, tests)
     are visible to everyone — the route layer never allows that path.
+
+    Phase 6: when ``owner_id`` is set, SADD the session id into the owner's
+    index set so the list endpoint can find them without scanning every
+    ``session:*`` key.
     """
     session_id = str(uuid.uuid4())
     payload = _empty_session(session_id, owner_id=owner_id)
-    await _get_redis().setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(payload))
+    redis = _get_redis()
+    await redis.setex(_key(session_id), SESSION_TTL_SECONDS, _serialize(payload))
+    if owner_id:
+        try:
+            await redis.sadd(_user_index_key(owner_id), session_id)
+        except Exception:
+            # Index is best-effort; a failure here must not block creation.
+            logger.exception("failed to add session %s to user index", session_id)
     logger.info("created session %s", session_id)
     return session_id
 
@@ -137,7 +159,68 @@ async def update_session(
 
 
 async def delete_session(session_id: str) -> bool:
+    """Delete a session. Returns True if the key existed.
+
+    Phase 6: also SREM the session from its owner's index set. We don't
+    know the owner here without reading the session first — the caller is
+    expected to pass it via ``delete_session_for_user`` if they want the
+    index cleaned up. The list endpoint tolerates orphan ids anyway.
+    """
     return bool(await _get_redis().delete(_key(session_id)))
+
+
+async def delete_session_for_user(session_id: str, owner_id: str | None) -> bool:
+    """Delete a session AND remove it from the owner's index.
+
+    Use this when the caller already knows the owner (the route layer does
+    — it fetched the session for the ACL check). ``delete_session`` without
+    the owner still works, just leaves the id in the index set (harmless
+    — the list endpoint filters orphans).
+    """
+    redis = _get_redis()
+    deleted = bool(await redis.delete(_key(session_id)))
+    if owner_id:
+        try:
+            await redis.srem(_user_index_key(owner_id), session_id)
+        except Exception:
+            logger.exception("failed to srem session %s from user index", session_id)
+    return deleted
+
+
+async def list_sessions_for_user(user_id: str) -> list[dict[str, Any]]:
+    """Return all live sessions owned by ``user_id``, newest first.
+
+    Phase 6: reads the owner's index SET, then GETs each id. Sessions that
+    expired via TTL (but weren't explicitly deleted) return None and are
+    lazily SREM'd so the index doesn't grow without bound.
+    """
+    redis = _get_redis()
+    try:
+        ids = await redis.smembers(_user_index_key(user_id))
+    except Exception:
+        logger.exception("failed to read session index for user %s", user_id)
+        return []
+    out: list[dict[str, Any]] = []
+    orphans: list[str] = []
+    for sid in ids:
+        raw = await redis.get(_key(sid))
+        if not raw:
+            orphans.append(sid)
+            continue
+        try:
+            session = json.loads(raw)
+        except json.JSONDecodeError:
+            orphans.append(sid)
+            continue
+        out.append(session)
+    if orphans:
+        try:
+            await redis.srem(_user_index_key(user_id), *orphans)
+        except Exception:
+            logger.exception("failed to prune orphan session ids from index")
+    # Newest first by updated_at (fallback created_at).
+    out.sort(key=lambda s: s.get("updated_at") or s.get("created_at") or "", reverse=True)
+    return out
 
 
 async def delete_sessions_by_data_source(data_source_id: str) -> int:

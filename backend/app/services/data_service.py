@@ -236,10 +236,31 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
         raise ValueError("File contains no rows")
 
     engine = get_engine(file_id)
-    indexed_summary: dict[str, list[str]] = {}
-    for table_name, df in clean_sheets.items():
-        df.to_sql(table_name, engine, if_exists="replace", index=False)
-        indexed_summary[table_name] = _auto_create_indexes(engine, table_name, df)
+    # Phase 6: full cleanup on any failure during to_sql / index creation.
+    # Previously a mid-load crash left a half-written SQLite file, the
+    # cached engine, and the upload_path on disk — leaking space and
+    # confusing later list_datasources calls. We dispose the engine and
+    # delete both files so the file_id is truly rolled back.
+    loaded_tables: list[str] = []
+    try:
+        indexed_summary: dict[str, list[str]] = {}
+        for table_name, df in clean_sheets.items():
+            df.to_sql(table_name, engine, if_exists="replace", index=False)
+            loaded_tables.append(table_name)
+            indexed_summary[table_name] = _auto_create_indexes(engine, table_name, df)
+    except Exception as e:
+        # Best-effort cleanup; surface the original error.
+        for _t in loaded_tables:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f'DROP TABLE IF EXISTS "{_t}"'))
+            except Exception:
+                pass
+        dispose_engine(file_id)
+        sqlite_path = SQLITE_DIR / f"{file_id}.db"
+        sqlite_path.unlink(missing_ok=True)
+        upload_path.unlink(missing_ok=True)
+        raise ValueError(f"Failed to load data into SQLite: {e}") from e
     logger.info(
         "Loaded %s (%d tables: %s) into %s",
         filename,
@@ -248,11 +269,11 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
         SQLITE_DIR / f"{file_id}.db",
     )
 
-    # Persist per-table column metadata + indexes to the sidecar so the
-    # agent's later ``list_tables`` / ``get_table_schema`` calls can show
-    # descriptions and units in the prompt. Samples are masked too so the
-    # LLM prompt (layer 4) never carries raw PII even if the column wasn't
-    # caught by the upload scrub.
+    # Persist per-table column metadata + indexes + row_count to the sidecar
+    # so the agent's later ``list_tables`` / ``get_table_schema`` calls can
+    # show descriptions and units in the prompt and skip COUNT(*) on every
+    # schema/list call. Samples are masked too so the LLM prompt (layer 4)
+    # never carries raw PII even if the column wasn't caught by the upload scrub.
     try:
         metadata_service.set_source_type(file_id, "sqlite")
         for table_name, df in clean_sheets.items():
@@ -271,6 +292,7 @@ async def save_uploaded_file(file: UploadFile, file_id: str) -> str:
                 columns=columns_meta,
                 indexes=indexed_summary.get(table_name, []),
                 replace_columns=True,
+                row_count=len(df),
             )
     except Exception as e:  # noqa: BLE001
         # Metadata is best-effort: a failure here must not block the upload.
@@ -338,11 +360,23 @@ def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, A
     try:
         with engine.connect() as conn:
             rows = conn.execute(text(f'PRAGMA table_info("{target}")')).fetchall()
-            count = conn.execute(text(f'SELECT COUNT(*) FROM "{target}"')).scalar()
     except Exception:
         return None
     side_meta = metadata_service.get_table_metadata(data_source_id, target) or {}
     side_cols = side_meta.get("columns") or {}
+    # Phase 6: prefer the row_count cached at upload time (in the sidecar)
+    # so list_tables / get_table_info don't fire COUNT(*) on every call —
+    # matters on 100k+ row tables where COUNT(*) is a full scan. The
+    # sidecar value is set once at upload; if the table was modified
+    # out-of-band (not via this app), the count will be stale, but that's
+    # an acceptable trade-off since the only write path is re-upload.
+    count = side_meta.get("row_count")
+    if count is None:
+        try:
+            with engine.connect() as conn:
+                count = conn.execute(text(f'SELECT COUNT(*) FROM "{target}"')).scalar()
+        except Exception:
+            count = 0
     columns = []
     for r in rows:
         name = r[1]

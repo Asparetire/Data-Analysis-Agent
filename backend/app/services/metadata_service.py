@@ -151,6 +151,7 @@ def set_table_metadata(
     columns: dict[str, dict[str, Any]] | None = None,
     indexes: list[str] | None = None,
     replace_columns: bool = False,
+    row_count: int | None = None,
 ) -> None:
     """Upsert metadata for one table.
 
@@ -159,6 +160,9 @@ def set_table_metadata(
             If ``replace_columns`` is True, the previous columns dict is
             dropped; otherwise we merge per-column (later writes win).
         indexes: list of column names that have an index. Replaces previous list.
+        row_count: Phase 6 — cached row count for the table. Set at upload
+            time so list_tables / get_table_info can skip the COUNT(*) round
+            trip on every schema/list call (matters on large tables).
     """
     if not table or not isinstance(table, str):
         raise ValueError("table must be a non-empty string")
@@ -184,6 +188,8 @@ def set_table_metadata(
             existing["columns"] = cols
         if indexes is not None:
             existing["indexes"] = list(indexes)
+        if row_count is not None:
+            existing["row_count"] = int(row_count)
         tables[table] = existing
         data[data_source_id] = entry
         _save(data)
