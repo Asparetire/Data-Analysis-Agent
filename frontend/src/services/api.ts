@@ -265,6 +265,7 @@ export async function* streamChat(
   message: string,
   dataSourceId?: string,
   dataSourceIds?: string[],
+  signal?: AbortSignal,
 ): AsyncGenerator<StreamEvent, void, void> {
   const body: Record<string, unknown> = { session_id: sessionId, message };
   if (dataSourceId) body.data_source_id = dataSourceId;
@@ -282,10 +283,15 @@ export async function* streamChat(
   } catch {
     /* ignore */
   }
+  // Phase 6: pass the abort signal through to fetch so the TCP connection
+  // actually closes when the user cancels. Without this the backend keeps
+  // running the graph (and burning LLM tokens) until it finishes — the
+  // previous "abort" only stopped the client from iterating events.
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal,
   });
 
   if (!response.ok || !response.body) {

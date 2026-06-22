@@ -80,6 +80,7 @@ export function useChat() {
           trimmed,
           dataSourceId,
           boundIds.length > 0 ? boundIds : undefined,
+          controller.signal,
         )) {
           if (controller.signal.aborted) break;
           handleStreamEvent(evt, activeSessionId, setSessionId);
@@ -103,7 +104,13 @@ export function useChat() {
           });
         }
       } catch (err) {
-        patchLastAssistant({ content: `Request failed: ${describeStreamError(err)}` });
+        // AbortError is expected when the user clicks stop — don't surface
+        // it as a request failure, the abort handler already marked the bubble.
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          // no-op
+        } else {
+          patchLastAssistant({ content: `Request failed: ${describeStreamError(err)}` });
+        }
       } finally {
         if (cancelRef.current === controller) cancelRef.current = null;
         setLoading(false);
