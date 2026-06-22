@@ -78,19 +78,6 @@ async function uploadCsv(page: Page, filename: string, rows: string) {
   });
 }
 
-/** Wait for a data source to appear in the sidebar list.
- *
- * The sidebar's getDataSources refresh (Sidebar useEffect on uploadedFileName)
- * is asynchronous — callers that need to interact with a just-uploaded source
- * in the sidebar should wait through this helper instead of assuming the
- * upload response means the sidebar has caught up.
- */
-async function waitForSidebarItem(page: Page, filename: string, timeout = 15_000) {
-  await expect(page.locator('.datasource-item', { hasText: filename }).first()).toBeVisible({
-    timeout,
-  });
-}
-
 test.describe('Phase 4E smoke', () => {
   test('register → upload → chat → analysis pagination', async ({ page }) => {
     const email = uniqueEmail();
