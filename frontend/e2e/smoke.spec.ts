@@ -25,8 +25,11 @@ async function register(page: Page, email: string, password = 'test-password-123
   await page.getByLabel('密码 (至少 8 位)').fill(password);
   await page.getByRole('button', { name: '注册并登录' }).click();
   // Auth.tsx unmounts once status flips to 'authed'; the header chip
-  // showing the email is the canonical "we're in" signal.
-  await expect(page.locator('.auth-user')).toContainText(email);
+  // showing the email is the canonical "we're in" signal. Give it headroom:
+  // register = bcrypt hash (~100ms) + /auth/me round trip + React render,
+  // and the ACL test runs two pages concurrently which stretches backend
+  // latency. Default expect timeout (5s) is too tight on CI.
+  await expect(page.locator('.auth-user')).toContainText(email, { timeout: 15_000 });
 }
 
 async function logout(page: Page) {
@@ -53,7 +56,7 @@ async function login(page: Page, email: string, password = 'test-password-123') 
   // Submit button text is "登录" — same as the tab button — so target
   // by type=submit to disambiguate.
   await page.locator('button[type="submit"]').click();
-  await expect(page.locator('.auth-user')).toContainText(email);
+  await expect(page.locator('.auth-user')).toContainText(email, { timeout: 15_000 });
 }
 
 async function uploadCsv(page: Page, filename: string, rows: string) {
@@ -222,11 +225,14 @@ test.describe('Phase 4E smoke', () => {
     const renameBtn = dsItem
       .first()
       .locator('.ds-row-action[title="重命名"], .ds-row-action[title="Rename"]');
+    await renameBtn.waitFor({ state: 'visible', timeout: 10_000 });
     await renameBtn.click();
 
     // Inline input with class ds-rename-input appears; fill + Enter to save.
+    // The input mounts via React state (editingId) on click — give it room
+    // on CI where event dispatch + render can lag behind the click return.
     const input = dsItem.first().locator('.ds-rename-input');
-    await input.waitFor({ state: 'visible', timeout: 5_000 });
+    await input.waitFor({ state: 'visible', timeout: 10_000 });
     await input.fill('我的销售数据');
     await input.press('Enter');
 
