@@ -74,6 +74,17 @@ async def upload_file(
     except Exception:  # noqa: BLE001
         logger.warning("failed to stamp owner on %s", file_id, exc_info=True)
 
+    # Persist the original filename as the display name so /datasources
+    # returns "sales.csv" instead of the on-disk "{uuid}.csv". Without
+    # this the sidebar shows UUIDs — the upload id stem is meaningless
+    # to users.
+    original_name = file.filename or ""
+    if original_name:
+        try:
+            metadata_service.set_display_name(file_id, original_name)
+        except Exception:  # noqa: BLE001
+            logger.warning("failed to set display name on %s", file_id, exc_info=True)
+
     return UploadResponse(
         file_id=file_id,
         filename=file.filename or "",
