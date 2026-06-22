@@ -92,11 +92,13 @@ async def test_query_database_cross_source_join(tmp_data_dir, make_upload):
     raw = await query_db.ainvoke({"sql_query": sql})
     payload = json.loads(raw)
     assert "error" not in payload, payload
-    assert payload["row_count"] == 3
+    # INNER JOIN drops Carol (customer_id=3 has no orders). Bob has the
+    # highest total (200), Alice second (100 + 50 = 150).
+    assert payload["row_count"] == 2
     names = [r["name"] for r in payload["rows"]]
-    assert names == ["Alice", "Bob", "Carol"]
-    # Alice should have the highest total (100 + 50 = 150).
-    assert payload["rows"][0]["name"] == "Alice"
+    assert names == ["Bob", "Alice"]
+    assert payload["rows"][0]["name"] == "Bob"
+    assert payload["rows"][0]["total"] == 200
 
 
 # ---------------------------------------------------------------------------

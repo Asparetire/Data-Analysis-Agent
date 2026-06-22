@@ -362,6 +362,12 @@ def get_table_info(data_source_id: str, table: str | None = None) -> dict[str, A
             rows = conn.execute(text(f'PRAGMA table_info("{target}")')).fetchall()
     except Exception:
         return None
+    # PRAGMA table_info returns zero rows for a missing table — without this
+    # check, the COUNT(*) fallback below would set count=0 and we'd return a
+    # dict with empty columns instead of None, breaking the "table not found"
+    # contract that get_table_schema relies on to emit its error payload.
+    if not rows:
+        return None
     side_meta = metadata_service.get_table_metadata(data_source_id, target) or {}
     side_cols = side_meta.get("columns") or {}
     # Phase 6: prefer the row_count cached at upload time (in the sidecar)

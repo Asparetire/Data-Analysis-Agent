@@ -69,6 +69,16 @@ async def test_get_table_info_uses_sidecar_row_count(tmp_data_dir, make_upload, 
 
     # Make COUNT(*) blow up — if get_table_info tries to run it, the test fails.
 
+    class _Result:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+        def scalar(self):
+            raise AssertionError("get_table_info fired COUNT(*) — should use sidecar")
+
     class _Conn:
         def __enter__(self):
             return self
@@ -80,9 +90,9 @@ async def test_get_table_info_uses_sidecar_row_count(tmp_data_dir, make_upload, 
             s = str(stmt)
             if "COUNT(*)" in s:
                 raise AssertionError("get_table_info fired COUNT(*) — should use sidecar")
-            # PRAGMA table_info — return an empty result for the test; the
-            # columns list will be empty but row_count still comes from sidecar.
-            return []
+            # PRAGMA table_info — return one dummy column row so get_table_info
+            # doesn't bail out on the `if not rows: return None` guard.
+            return _Result([(0, "x", "INTEGER", 0, None, 0)])
 
     def _patched_connect():
         return _Conn()
