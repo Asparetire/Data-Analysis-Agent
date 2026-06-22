@@ -75,6 +75,14 @@ async function uploadCsv(page: Page, filename: string, rows: string) {
   await expect(page.getByText(filename, { exact: true })).toBeVisible({
     timeout: 15_000,
   });
+  // The sidebar's getDataSources refresh (triggered by uploadedFileName
+  // changing in the store) runs asynchronously after the upload succeeds.
+  // Wait for the data source to appear in the sidebar list before
+  // returning, so callers can immediately interact with it (delete,
+  // rename, etc.) without racing the refresh.
+  await expect(page.locator('.datasource-item', { hasText: filename })).toBeVisible({
+    timeout: 15_000,
+  });
 }
 
 test.describe('Phase 4E smoke', () => {
@@ -152,8 +160,10 @@ test.describe('Phase 4E smoke', () => {
     await uploadCsv(page, 'to_delete.csv', 'id,name\n1,x\n');
 
     // Wait for the sidebar to list the uploaded data source. The upload
-    // helper returns once the filename is visible somewhere, but the
-    // sidebar refresh (Sidebar useEffect) runs separately.
+    // helper returns once the filename is visible in the Upload component,
+    // but the sidebar's getDataSources refresh (Sidebar useEffect on
+    // uploadedFileName) runs separately — wait for the ds-name label to
+    // appear inside the sidebar list specifically.
     const dsItem = page.locator('.datasource-item', { hasText: 'to_delete.csv' });
     await dsItem.first().waitFor({ state: 'visible', timeout: 15_000 });
 
@@ -161,8 +171,13 @@ test.describe('Phase 4E smoke', () => {
     // Playwright auto-dismisses these unless we register a handler.
     page.once('dialog', (d) => void d.accept());
 
-    // Click the delete button (class ds-row-action-danger — the trash icon).
-    await dsItem.first().locator('.ds-row-action-danger').click();
+    // Click the delete button by its title attribute (zh="删除",
+    // en="Delete") — more robust than CSS class alone, which also matches
+    // the attach/lineage buttons.
+    const deleteBtn = dsItem
+      .first()
+      .locator('.ds-row-action[title="删除"], .ds-row-action[title="Delete"]');
+    await deleteBtn.click();
 
     // The data source should disappear from the sidebar list.
     await expect(page.locator('.datasource-item', { hasText: 'to_delete.csv' })).toHaveCount(0, {
@@ -200,12 +215,13 @@ test.describe('Phase 4E smoke', () => {
     const dsItem = page.locator('.datasource-item', { hasText: 'rename_me.csv' });
     await dsItem.first().waitFor({ state: 'visible', timeout: 15_000 });
 
-    // Action buttons after .datasource-item-main are, in order:
-    // attach (CheckCircle2 — a span when active, button when not),
-    // rename (Pencil), lineage (History), delete (Trash2).
-    // The rename button is the ds-row-action with title containing "重命名".
-    // Use CSS nth(1) — the 2nd ds-row-action (attach is 0th).
-    const renameBtn = dsItem.first().locator('.ds-row-action').nth(1);
+    // Click the rename button by its title (zh="重命名", en="Rename").
+    // Positional nth() is fragile — when the data source is the active
+    // source (as it is right after upload), the attach button renders as
+    // a non-button <span>, shifting the nth() index of button matches.
+    const renameBtn = dsItem
+      .first()
+      .locator('.ds-row-action[title="重命名"], .ds-row-action[title="Rename"]');
     await renameBtn.click();
 
     // Inline input with class ds-rename-input appears; fill + Enter to save.
