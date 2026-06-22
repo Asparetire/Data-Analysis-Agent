@@ -61,6 +61,13 @@ export default defineConfig({
         // DB 15 is reserved for E2E so we don't collide with dev sessions.
         REDIS_URL: 'redis://localhost:6379/15',
         JWT_SECRET: 'e2e-secret-32-bytes-long-aaaaaaaaaaaa',
+        // E2E runs ~10 register calls (8 tests + ACL's 2 pages) from one IP
+        // within a minute. The default per-IP register limit is
+        // RATE_LIMIT_PER_IP_PER_MINUTE // 2 = 10/min — right at the boundary,
+        // so the last register (ACL pageB) gets 429'd and fails. Lift the
+        // ceiling for the E2E backend so the suite isn't rate-limit-bound.
+        RATE_LIMIT_PER_IP_PER_MINUTE: '100',
+        RATE_LIMIT_PER_USER_PER_MINUTE: '100',
       },
     },
     {

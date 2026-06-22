@@ -219,19 +219,18 @@ test.describe('Phase 4E smoke', () => {
     await dsItem.first().waitFor({ state: 'visible', timeout: 15_000 });
 
     // Click the rename button by its title (zh="重命名", en="Rename").
-    // Positional nth() is fragile — when the data source is the active
-    // source (as it is right after upload), the attach button renders as
-    // a non-button <span>, shifting the nth() index of button matches.
     const renameBtn = dsItem
       .first()
       .locator('.ds-row-action[title="重命名"], .ds-row-action[title="Rename"]');
     await renameBtn.waitFor({ state: 'visible', timeout: 10_000 });
     await renameBtn.click();
 
-    // Inline input with class ds-rename-input appears; fill + Enter to save.
-    // The input mounts via React state (editingId) on click — give it room
-    // on CI where event dispatch + render can lag behind the click return.
-    const input = dsItem.first().locator('.ds-rename-input');
+    // The rename click swaps the item's content: .datasource-item-main and
+    // all .ds-row-action buttons unmount, replaced by a single .ds-rename-input.
+    // So we can't scope the input to dsItem anymore (its hasText filter no
+    // longer matches — the filename text is gone during edit). Only one item
+    // is editable at a time, so a global .ds-rename-input is unambiguous.
+    const input = page.locator('.ds-rename-input');
     await input.waitFor({ state: 'visible', timeout: 10_000 });
     await input.fill('我的销售数据');
     await input.press('Enter');
