@@ -68,12 +68,19 @@ async function uploadCsv(page: Page, filename: string, rows: string) {
   mkdirSync(dir, { recursive: true });
   const path = join(dir, filename);
   writeFileSync(path, rows, 'utf-8');
+  // Attach the file + wait for the upload response. We don't assert on the
+  // Upload component's DOM afterwards because it unmounts the moment the
+  // store flips activeId (the App.tsx render guard `!activeId` hides it).
+  // The canonical "upload landed" signal is the /datasources refresh
+  // listing the new source by its original filename (the upload route
+  // now persists file.filename as display_name).
+  const uploadResponse = page.waitForResponse(
+    (r) => r.url().includes('/api/v1/upload') && r.request().method() === 'POST' && r.ok(),
+    { timeout: 15_000 },
+  );
   await input.setInputFiles(path);
-  // The upload area flips to "uploaded" state showing the filename in a
-  // <p title={fileName}>. Scope to that element so we don't also match
-  // the sidebar's ds-name (which renders the same filename after the
-  // /datasources refresh) and end up waiting on the slower sidebar.
-  await expect(page.locator(`.upload-area p[title="${filename}"]`)).toBeVisible({
+  await uploadResponse;
+  await expect(page.locator('.datasource-item', { hasText: filename }).first()).toBeVisible({
     timeout: 15_000,
   });
 }
@@ -241,12 +248,9 @@ test.describe('Phase 4E smoke', () => {
     const emailA = uniqueEmail();
     await register(pageA, emailA);
     await uploadCsv(pageA, 'acl_secret.csv', 'id,secret\n1,aaa\n2,bbb\n');
-    // uploadCsv already waited for the Upload component to show the filename.
-    // Also confirm the sidebar lists it (name now equals the original
-    // filename, not the on-disk UUID stem, thanks to the upload-route fix).
-    await expect(
-      pageA.locator('.datasource-item', { hasText: 'acl_secret.csv' }).first(),
-    ).toBeVisible({ timeout: 15_000 });
+    // uploadCsv already confirmed the sidebar lists the file by its original
+    // name (the upload route now persists file.filename as display_name, so
+    // /datasources returns "acl_secret.csv" not the on-disk UUID stem).
 
     // User B registers in a fresh context — should see zero data sources.
     const pageB = await browser.newPage();
