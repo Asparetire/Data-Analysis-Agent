@@ -1,0 +1,125 @@
+# Production deployment compose. Uses pre-built images from ghcr.io
+# instead of building from source. Pull this file (plus .env.example)
+# onto your server and run:
+#
+#   cp .env.example .env  # then edit JWT_SECRET / MIGRATION_ADMIN_PASSWORD / etc.
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# To pull a specific version instead of :latest, set IMAGE_TAG in .env.
+#
+# Differences from docker-compose.yml:
+#   - No `build:` blocks — images come from ghcr.io.
+#   - Redis host port removed (only reachable inside the compose network).
+#   - MinIO host ports removed (use the backup/restore profile for access).
+#   - The nginx METRICS_ALLOW_CIDR defaults to loopback; override in .env
+#     to allow your Prometheus scraper's CIDR.
+
+services:
+  backend:
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
+    expose:
+      - "8000"
+    environment:
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required (>=32 bytes)}
+      - ACCESS_TOKEN_TTL_MINUTES=${ACCESS_TOKEN_TTL_MINUTES:-15}
+      - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-7}
+      - MIGRATION_ADMIN_EMAIL=${MIGRATION_ADMIN_EMAIL:-admin@local.invalid}
+      - MIGRATION_ADMIN_PASSWORD=${MIGRATION_ADMIN_PASSWORD:?MIGRATION_ADMIN_PASSWORD is required (>=12 bytes)}
+      - RATE_LIMIT_PER_USER_PER_MINUTE=${RATE_LIMIT_PER_USER_PER_MINUTE:-60}
+      - RATE_LIMIT_PER_IP_PER_MINUTE=${RATE_LIMIT_PER_IP_PER_MINUTE:-20}
+      - MAX_CONCURRENT_SSE_PER_USER=${MAX_CONCURRENT_SSE_PER_USER:-5}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
+      - LLM_REQUEST_TIMEOUT_S=${LLM_REQUEST_TIMEOUT_S:-60.0}
+      - LOG_FORMAT=${LOG_FORMAT:-json}
+      - REDIS_URL=redis://redis:6379/0
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - DATA_DIR=/app/data
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost"]}
+    volumes:
+      - backend_data:/app/data
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  nginx:
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-nginx:${IMAGE_TAG:-latest}
+    ports:
+      - "80:80"
+    environment:
+      - METRICS_ALLOW_CIDR=${METRICS_ALLOW_CIDR:-127.0.0.1/32}
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    command: server /data --console-address ":9001"
+    environment:
+      - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required (>=8 chars)}
+    expose:
+      - "9000"
+      - "9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  backup:
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
+    command: python scripts/backup.py
+    environment:
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      - MINIO_BUCKET=${MINIO_BUCKET:-data-analysis-backups}
+      - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
+    volumes:
+      - backend_data:/app/data
+      - redis_data:/data:ro
+    depends_on:
+      - backend
+      - redis
+      - minio
+    profiles:
+      - backup
+
+  restore:
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
+    command: python scripts/restore.py
+    environment:
+      - DATABASE_URL=sqlite:///app/data/main.db
+      - REDIS_URL=redis://redis:6379/0
+      - MINIO_ENDPOINT=http://minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
+      - MINIO_SECRET_KEY=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required}
+      - MINIO_BUCKET=${MINIO_BUCKET:-data-analysis-backups}
+    volumes:
+      - backend_data:/app/data
+      - redis_data:/data
+    depends_on:
+      - redis
+      - minio
+    profiles:
+      - backup
+
+volumes:
+  backend_data:
+  redis_data:
+  minio_data:
