@@ -51,18 +51,44 @@ npm run dev
 
 ### 3. Docker（生产形态）
 
+两种 compose：
+
+**预构建镜像（生产推荐）** — 拉 ghcr.io 的 published 镜像：
+
+```bash
+mkdir data-analysis-agent && cd data-analysis-agent
+curl -LO https://raw.githubusercontent.com/AAsparetire/data-analysis-agent/main/docker-compose.prod.yml
+curl -LO https://raw.githubusercontent.com/AAsparetire/data-analysis-agent/main/.env.example
+cp .env.example .env
+# 编辑 .env（见下方必填项）
+docker compose -f docker-compose.prod.yml up -d
+```
+
+**源码构建（开发 / 临时）**：
+
 ```bash
 cp .env.example .env  # 项目根目录
 # 编辑 .env 填入 OPENAI_API_KEY / JWT_SECRET / MIGRATION_ADMIN_PASSWORD / MINIO_ROOT_PASSWORD
 docker compose up --build
 ```
 
+必填 env（启动校验会拒绝占位符）：
+
+- `JWT_SECRET` ≥32 字节
+- `MIGRATION_ADMIN_PASSWORD` ≥12 字节
+- `MINIO_ROOT_PASSWORD` ≥8 字符
+- `OPENAI_API_KEY`（或 `ANTHROPIC_API_KEY`，看 `LLM_PROVIDER`）
+- `METRICS_ALLOW_CIDR` — Prometheus scraper 的 CIDR（默认仅 loopback）
+- `TRUSTED_PROXIES` — 反代容器 IP/CIDR（否则 per-IP 限流失效）
+
 - 入口（Nginx，前端静态 + /api 反代）: http://localhost
-- MinIO 控制台: http://localhost:9001
-- Redis: localhost:6379（本地开发保留 host 端口；生产部署可去掉）
-- 后端 8000 / MinIO 9000 仅在 compose 网络内暴露，不直接访问
+- Swagger: http://localhost/api/v1/docs
+- `/metrics` 仅 `METRICS_ALLOW_CIDR` 内可访问
+- MinIO 控制台 / Redis / 后端 8000 仅在 compose 网络内暴露（prod 形态）
 
 多阶段镜像：backend ~250MB（builder 装 gcc，runtime 不带），frontend = nginx:alpine + 静态 dist。TLS 交给上游（云 LB / Cloudflare），nginx 只听 80。
+
+详见 [docs/docs/deployment.md](docs/docs/deployment.md)。
 
 ### 4. 测试
 

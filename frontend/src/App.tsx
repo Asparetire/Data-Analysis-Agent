@@ -17,6 +17,7 @@ import { useUpload } from './hooks/useUpload';
 import { toggleLocale, toggleTheme, useT, useTheme } from './hooks/useUi';
 import Sidebar from './components/Sidebar';
 import FileUpload from './components/Upload';
+import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import Auth from './pages/Auth';
@@ -195,7 +196,7 @@ export default function App() {
             </div>
           ) : null}
 
-          <Page />
+          <ErrorBoundary>{<Page />}</ErrorBoundary>
 
           {status === 'uploading' ? (
             <div

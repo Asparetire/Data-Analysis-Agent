@@ -1,6 +1,35 @@
 # Shared config for the Python tooling the pre-commit hooks (and devs' IDEs)
 # pick up. Keep this in the repo root so ruff/black resolve it from anywhere.
 
+[project]
+name = "data-analysis-agent"
+version = "0.2.0"
+description = "Upload CSV/Excel, ask questions in natural language, get SQL-driven answers + charts."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "AAsparetire" }]
+keywords = ["langgraph", "fastapi", "data-analysis", "sql", "agent"]
+classifiers = [
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Database :: Front-Ends",
+]
+
+# Dependencies live in backend/requirements.txt (pip-compile output). We
+# don't duplicate them here to avoid drift — `pip install .` will NOT
+# install runtime deps. Use `pip install -r backend/requirements.txt`
+# for that. This [project] block exists for tooling metadata (PyPI
+# publishability, IDE recognition) rather than installability.
+
+[project.urls]
+Homepage = "https://github.com/AAsparetire/data-analysis-agent"
+Repository = "https://github.com/AAsparetire/data-analysis-agent"
+Issues = "https://github.com/AAsparetire/data-analysis-agent/issues"
+
 [tool.black]
 line-length = 100
 target-version = ["py311"]

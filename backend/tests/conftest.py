@@ -18,6 +18,13 @@ from typing import Any
 # Must run before `app.config` is imported anywhere. pytest loads conftest
 # first, so setting it at module top does the job.
 os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-32-bytes-long-aaaa")
+# Skip both startup validators (JWT_SECRET + MIGRATION_ADMIN_PASSWORD) in tests.
+os.environ.setdefault("JWT_SECRET_DEV_OK", "1")
+# Phase 6: the default MIGRATION_ADMIN_PASSWORD ("change-me-now") has no
+# digits and would be rejected by the new complexity policy when the
+# startup migration tries to register the admin. Override to a value that
+# passes the policy so TestClient startup doesn't blow up.
+os.environ.setdefault("MIGRATION_ADMIN_PASSWORD", "migration-admin-pwd-001")
 
 import fakeredis.aioredis
 import pytest

@@ -6,6 +6,7 @@ import time
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..config import settings
 from ..services import session_service
 from ..services.chat_service import (
     SessionBindingError,
@@ -22,6 +23,85 @@ logger = get_logger(__name__)
 
 class StreamForbidden(Exception):
     """Raised when the user lacks ownership of the session or bound sources."""
+
+
+class StreamConcurrencyLimit(Exception):
+    """Raised when the user already holds MAX_CONCURRENT_SSE_PER_USER streams."""
+
+
+_SSE_COUNTER_KEY_PREFIX = "sse:active:user:"
+
+
+# Track concurrent SSE streams per user so one user can't pin all event-loop
+# slots with parallel long-running /chat/stream calls. The counter is held in
+# Redis so it works across workers (the rest of the rate-limit infra uses the
+# same Redis instance).
+async def _acquire_sse_slot(user_id: str | None) -> bool:
+    """Atomically INCR the user's SSE counter; return False if over the cap.
+
+    On Redis error we fail open (allow the stream) — a Redis blip shouldn't
+    lock the chat. The error is logged by the caller.
+    """
+    from ..utils.metrics import SSE_ACTIVE_STREAMS, SSE_REJECTED_TOTAL
+
+    if not user_id:
+        return True  # unauth path can't happen here — /chat/stream requires auth
+    redis = session_service._get_redis()  # noqa: SLF001
+    key = f"{_SSE_COUNTER_KEY_PREFIX}{user_id}"
+    try:
+        # INCR is atomic. We expire (60 min) so a crashed worker that
+        # forgot to DECR doesn't pin the slot forever — the slot leaks
+        # until TTL, but that's bounded.
+        pipe = redis.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 3600)
+        count, _ = await pipe.execute()
+    except Exception:
+        logger.exception("redis unavailable; SSE concurrency check skipped")
+        return True
+    if count > settings.MAX_CONCURRENT_SSE_PER_USER:
+        # Over the cap — undo the INCR so the next attempt gets a fair shot.
+        try:
+            await redis.decr(key)
+        except Exception:
+            logger.exception("failed to undo SSE INCR; counter may drift")
+        SSE_REJECTED_TOTAL.inc()
+        return False
+    SSE_ACTIVE_STREAMS.inc()
+    return True
+
+
+async def _release_sse_slot(user_id: str | None) -> None:
+    from ..utils.metrics import SSE_ACTIVE_STREAMS
+
+    if not user_id:
+        return
+    redis = session_service._get_redis()  # noqa: SLF001
+    key = f"{_SSE_COUNTER_KEY_PREFIX}{user_id}"
+    try:
+        # DECR but never go below 0 (a crashed INCR/DECR pair could leave us
+        # at -1, which would let the next INCR succeed at 0 and bypass the cap).
+        count = await redis.decr(key)
+        if count < 0:
+            await redis.set(key, 0)
+    except Exception:
+        logger.exception("failed to release SSE slot; counter may drift")
+    SSE_ACTIVE_STREAMS.dec()
+
+
+async def _release_sse_slot(user_id: str | None) -> None:
+    if not user_id:
+        return
+    redis = session_service._get_redis()  # noqa: SLF001
+    key = f"{_SSE_COUNTER_KEY_PREFIX}{user_id}"
+    try:
+        # DECR but never go below 0 (a crashed INCR/DECR pair could leave us
+        # at -1, which would let the next INCR succeed at 0 and bypass the cap).
+        count = await redis.decr(key)
+        if count < 0:
+            await redis.set(key, 0)
+    except Exception:
+        logger.exception("failed to release SSE slot; counter may drift")
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +227,56 @@ async def stream_chat(
     Phase 4A: when ``owner_id`` is supplied, sessions and data sources not
     owned by that user short-circuit to a single ``error`` event instead of
     running the graph.
+
+    Phase 6: acquires a per-user concurrent-SSE slot before streaming. The
+    slot is released in the ``finally`` of the outer try so client disconnect
+    (which cancels the generator) still frees it. Over-cap requests get a
+    single ``error`` event with code 429.
     """
     run_started = time.perf_counter()
 
+    # Phase 6: concurrency cap. Acquired before any work so a rejected stream
+    # doesn't waste cycles. The slot is held for the lifetime of this
+    # generator — released when the generator exits (normally, via cancel,
+    # or via exception).
+    slot_acquired = False
+    if owner_id is not None:
+        if not await _acquire_sse_slot(owner_id):
+            yield _sse(
+                "error",
+                {
+                    "type": "error",
+                    "code": 429,
+                    "message": "Too many concurrent chat streams. Close one and try again.",
+                },
+            )
+            return
+        slot_acquired = True
+    try:
+        async for event in _stream_chat_inner(
+            session_id,
+            message,
+            data_source_id,
+            data_source_ids,
+            owner_id=owner_id,
+            run_started=run_started,
+        ):
+            yield event
+    finally:
+        if slot_acquired:
+            await _release_sse_slot(owner_id)
+
+
+async def _stream_chat_inner(
+    session_id: str,
+    message: str,
+    data_source_id: str | None,
+    data_source_ids: list[str] | None,
+    *,
+    owner_id: str | None,
+    run_started: float,
+) -> AsyncIterator[dict[str, str]]:
+    """Inner generator — owns the actual stream. Concurrency slot is held by the caller."""
     # 1. Session resolution (reuses the same rules as the non-streaming path).
     try:
         session = await _resolve_session(

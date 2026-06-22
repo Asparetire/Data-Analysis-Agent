@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Sequence
 from typing import Any
 
@@ -17,6 +18,11 @@ from langgraph.graph import END, StateGraph
 from langgraph.prebuilt import ToolNode
 
 from ..config import settings
+from ..utils.metrics import (
+    LLM_CALL_DURATION_SECONDS,
+    LLM_CALLS_TOTAL,
+    LLM_TOKENS_USED_TOTAL,
+)
 from .state import AgentState
 from .tools import build_tools
 
@@ -60,6 +66,10 @@ def _build_openai_llm(temperature: float) -> ChatOpenAI:
         "model": settings.OPENAI_MODEL,
         "temperature": temperature,
         "streaming": True,
+        # Phase 6: hard wall-clock timeout per call. Without this a stalled
+        # provider keeps the request (and the SSE connection) open until the
+        # client gives up, burning an event-loop slot.
+        "timeout": settings.LLM_REQUEST_TIMEOUT_S,
         # Reasoning models (e.g. minimax-m3 on Ark) emit a long chain of
         # thinking tokens before any visible content. Without an explicit
         # cap, the server's default max_tokens can be small enough that the
@@ -87,6 +97,7 @@ def _build_anthropic_llm(temperature: float):
         "temperature": temperature,
         "streaming": True,
         "max_tokens": 4096,
+        "timeout": settings.LLM_REQUEST_TIMEOUT_S,
     }
     if settings.ANTHROPIC_API_KEY:
         kwargs["api_key"] = settings.ANTHROPIC_API_KEY
@@ -265,12 +276,36 @@ def build_graph(
         # We replicate the same check here so the consumer can suppress
         # intermediate streaming safely.
         full: AIMessage | None = None
-        async for chunk in llm.astream(messages):
-            if not isinstance(chunk, AIMessageChunk):
-                continue
-            # Accumulate by summing chunks; langchain's merge semantics for
-            # AIMessageChunk add tool_calls and content piecewise.
-            full = chunk if full is None else full + chunk  # type: ignore[operator]
+        provider_label = (settings.LLM_PROVIDER or "openai").lower()
+        if settings.LLM_MOCK:
+            provider_label = "mock"
+        t0 = time.perf_counter()
+        try:
+            async for chunk in llm.astream(messages):
+                if not isinstance(chunk, AIMessageChunk):
+                    continue
+                # Accumulate by summing chunks; langchain's merge semantics for
+                # AIMessageChunk add tool_calls and content piecewise.
+                full = chunk if full is None else full + chunk  # type: ignore[operator]
+        except Exception:
+            LLM_CALLS_TOTAL.labels(provider=provider_label, status="error").inc()
+            raise
+        elapsed = time.perf_counter() - t0
+        LLM_CALL_DURATION_SECONDS.labels(provider=provider_label).observe(elapsed)
+        LLM_CALLS_TOTAL.labels(provider=provider_label, status="ok").inc()
+        # Token usage: langchain surfaces usage_metadata on the final
+        # AIMessage when the provider reports it. Best-effort — missing
+        # on some providers (Ark, etc.) where we just skip the counter.
+        usage = getattr(full, "usage_metadata", None) if full else None
+        if isinstance(usage, dict):
+            prompt = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+            completion = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+            if prompt:
+                LLM_TOKENS_USED_TOTAL.labels(provider=provider_label, kind="prompt").inc(prompt)
+            if completion:
+                LLM_TOKENS_USED_TOTAL.labels(provider=provider_label, kind="completion").inc(
+                    completion
+                )
         assert full is not None
         # If this response will trigger another tool call, the user shouldn't
         # see the half-baked thinking -- keep it for the agent but don't emit.

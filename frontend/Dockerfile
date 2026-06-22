@@ -21,7 +21,16 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 
 # nginx config — serves SPA + proxies /api to the backend service.
 # The compose network resolves `backend` to the backend container's IP.
-COPY nginx/frontend.conf /etc/nginx/conf.d/default.conf
+# The file is a template: ${METRICS_ALLOW_CIDR} is substituted at container
+# start from the env var (defaults to 127.0.0.1/32 so /metrics is locked
+# down to loopback unless the operator opens it up).
+COPY nginx/frontend.conf /etc/nginx/templates/default.conf.template
+
+# nginx:alpine ships with the official entrypoint that runs envsubst on
+# /etc/nginx/templates/*.template → /etc/nginx/conf.d/*. The default
+# METRICS_ALLOW_CIDR here matches the deny-all-but-loopback posture; the
+# compose file overrides it via the environment block.
+ENV METRICS_ALLOW_CIDR=127.0.0.1/32
 
 EXPOSE 80
 

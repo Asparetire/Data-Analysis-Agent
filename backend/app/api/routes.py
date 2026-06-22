@@ -330,15 +330,26 @@ async def tables_datasource(
     data_source_id: str,
     user: dict = Depends(current_user),
 ):
-    """Phase 4D: list tables in this data source for the table browser."""
+    """Phase 4D: list tables in this data source for the table browser.
+
+    Phase 6: pulls row_count from the sidecar (set at upload time) so we
+    don't fire ``SELECT COUNT(*)`` on every table in the source — that's
+    N full scans on large uploads. Falls back to ``get_table_info`` for
+    tables that don't have a sidecar entry yet (pre-Phase-6 uploads).
+    """
     _check_datasource_owner(data_source_id, user)
 
     def _list() -> list[dict]:
         names = data_service.list_tables(data_source_id)
         out = []
         for name in names:
-            info = data_service.get_table_info(data_source_id, name)
-            out.append({"name": name, "row_count": info.get("row_count", 0) if info else 0})
+            side = metadata_service.get_table_metadata(data_source_id, name) or {}
+            row_count = side.get("row_count")
+            if row_count is None:
+                # Pre-Phase-6 data source — fall back to a live COUNT(*).
+                info = data_service.get_table_info(data_source_id, name)
+                row_count = info.get("row_count", 0) if info else 0
+            out.append({"name": name, "row_count": row_count})
         return out
 
     out = await asyncio.to_thread(_list)
@@ -446,7 +457,12 @@ async def get_session(session_id: str, user: dict = Depends(current_user)):
 async def create_session(user: dict = Depends(current_user)):
     session_id = await session_service.create_session(owner_id=user["id"])
     session = await session_service.get_session(session_id)
-    assert session is not None
+    if session is None:
+        # Should be impossible — we just created it. Treat as a 5xx so the
+        # operator notices if Redis round-trip ever fails this way.
+        raise HTTPException(
+            status_code=500, detail="Session disappeared immediately after creation"
+        )
     return SessionCreateResponse(
         session_id=session["session_id"],
         data_source_id=session.get("data_source_id"),
@@ -458,6 +474,35 @@ async def create_session(user: dict = Depends(current_user)):
         updated_at=session.get("updated_at"),
         ttl_seconds=session_service.SESSION_TTL_SECONDS,
     )
+
+
+@router.get("/sessions", response_model=list[SessionView], tags=["sessions"])
+async def list_sessions(user: dict = Depends(current_user)):
+    """Phase 6: list all live sessions owned by the current user.
+
+    Sessions that expired via TTL but weren't explicitly deleted are pruned
+    from the per-user index on read. Returns the full SessionView for each
+    so the client can show chat history previews without N extra GETs.
+    """
+    sessions = await session_service.list_sessions_for_user(user["id"])
+    out: list[SessionView] = []
+    for s in sessions:
+        sid = s["session_id"]
+        ttl = await session_service.ttl(sid) or 0
+        out.append(
+            SessionView(
+                session_id=sid,
+                data_source_id=s.get("data_source_id"),
+                data_source_ids=s.get("data_source_ids") or [],
+                chat_history=s.get("chat_history", []),
+                intermediate_results=s.get("intermediate_results"),
+                last_query=s.get("last_query"),
+                created_at=s.get("created_at"),
+                updated_at=s.get("updated_at"),
+                ttl_seconds=ttl,
+            )
+        )
+    return out
 
 
 @router.patch("/sessions/{session_id}", response_model=SessionView, tags=["sessions"])
@@ -495,7 +540,8 @@ async def delete_session(session_id: str, user: dict = Depends(current_user)):
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found")
     _check_session_owner(session, user)
-    deleted = await session_service.delete_session(session_id)
+    # Phase 6: use the owner-aware delete so the per-user index is cleaned up.
+    deleted = await session_service.delete_session_for_user(session_id, user["id"])
     if not deleted:
         raise HTTPException(status_code=404, detail="Session not found")
     return None

@@ -1,14 +1,25 @@
+# Production deployment compose. Uses pre-built images from ghcr.io
+# instead of building from source. Pull this file (plus .env.example)
+# onto your server and run:
+#
+#   cp .env.example .env  # then edit JWT_SECRET / MIGRATION_ADMIN_PASSWORD / etc.
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# To pull a specific version instead of :latest, set IMAGE_TAG in .env.
+#
+# Differences from docker-compose.yml:
+#   - No `build:` blocks — images come from ghcr.io.
+#   - Redis host port removed (only reachable inside the compose network).
+#   - MinIO host ports removed (use the backup/restore profile for access).
+#   - The nginx METRICS_ALLOW_CIDR defaults to loopback; override in .env
+#     to allow your Prometheus scraper's CIDR.
+
 services:
   backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    # No host port — nginx proxies /api to this container. Exposing 8000
-    # would let clients bypass the reverse proxy (and its security headers).
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
     expose:
       - "8000"
     environment:
-      # LLM provider — switch with LLM_PROVIDER=anthropic to use Claude.
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o}
@@ -16,25 +27,17 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
-      # Phase 4A: auth — JWT_SECRET must be ≥32 bytes, override in .env.
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required (≥32 bytes)}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required (>=32 bytes)}
       - ACCESS_TOKEN_TTL_MINUTES=${ACCESS_TOKEN_TTL_MINUTES:-15}
       - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-7}
       - MIGRATION_ADMIN_EMAIL=${MIGRATION_ADMIN_EMAIL:-admin@local.invalid}
-      - MIGRATION_ADMIN_PASSWORD=${MIGRATION_ADMIN_PASSWORD:?MIGRATION_ADMIN_PASSWORD is required}
-      # Phase 4B: rate limits
+      - MIGRATION_ADMIN_PASSWORD=${MIGRATION_ADMIN_PASSWORD:?MIGRATION_ADMIN_PASSWORD is required (>=12 bytes)}
       - RATE_LIMIT_PER_USER_PER_MINUTE=${RATE_LIMIT_PER_USER_PER_MINUTE:-60}
       - RATE_LIMIT_PER_IP_PER_MINUTE=${RATE_LIMIT_PER_IP_PER_MINUTE:-20}
-      # Phase 5B: observability
-      - LOG_FORMAT=${LOG_FORMAT:-json}
-      # Phase 6: trust the nginx container (and the compose bridge network)
-      # as a proxy so X-Forwarded-For is honored for per-IP rate limiting.
-      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
-      # Phase 6: per-user concurrent SSE cap
       - MAX_CONCURRENT_SSE_PER_USER=${MAX_CONCURRENT_SSE_PER_USER:-5}
-      # Phase 6: LLM call timeout
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16}
       - LLM_REQUEST_TIMEOUT_S=${LLM_REQUEST_TIMEOUT_S:-60.0}
-      # Infra
+      - LOG_FORMAT=${LOG_FORMAT:-json}
       - REDIS_URL=redis://redis:6379/0
       - DATABASE_URL=sqlite:///app/data/main.db
       - DATA_DIR=/app/data
@@ -43,57 +46,41 @@ services:
       - backend_data:/app/data
     depends_on:
       - redis
+    restart: unless-stopped
 
-  # Single ingress — serves frontend static (built into the image) and
-  # proxies /api/* to the backend. TLS is terminated upstream (cloud LB /
-  # Cloudflare), so this only listens on 80.
   nginx:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-nginx:${IMAGE_TAG:-latest}
     ports:
       - "80:80"
     environment:
-      # CIDR allowed to scrape /metrics. Default loopback — production
-      # deployments override this with the Prometheus scraper's IP/CIDR.
       - METRICS_ALLOW_CIDR=${METRICS_ALLOW_CIDR:-127.0.0.1/32}
     depends_on:
       - backend
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
     expose:
       - "6379"
-    ports:
-      # Keep host port for local dev (pytest / manual redis-cli). Production
-      # deployments should drop this and only expose inside the compose network.
-      - "6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
 
-  # MinIO — S3-compatible local object storage, used as the backup target.
-  # Console at :9001 lets you browse uploaded backups in the browser.
   minio:
     image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: server /data --console-address ":9001"
     environment:
       - MINIO_ROOT_USER=${MINIO_ROOT_USER:-minioadmin}
-      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required (≥8 chars)}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
+      - MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD:?MINIO_ROOT_PASSWORD is required (>=8 chars)}
+    expose:
+      - "9000"
+      - "9001"
     volumes:
       - minio_data:/data
+    restart: unless-stopped
 
-  # One-shot backup runner. Triggered manually:
-  #   docker compose run --rm backup
-  # Scheduling (cron / K8s CronJob / systemd timer) lives outside compose.
-  # Reuses the backend image so the script has the same deps (boto3, redis,
-  # sqlalchemy) as the app — no separate image to maintain.
   backup:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
     command: python scripts/backup.py
     environment:
       - DATABASE_URL=sqlite:///app/data/main.db
@@ -105,24 +92,16 @@ services:
       - BACKUP_RETENTION_DAYS=${BACKUP_RETENTION_DAYS:-7}
     volumes:
       - backend_data:/app/data
-      # Read-only access to redis dump.rdb so backup.py can copy it.
       - redis_data:/data:ro
     depends_on:
       - backend
       - redis
       - minio
     profiles:
-      # Don't start on `docker compose up` — only on explicit `--profile backup`.
       - backup
 
-  # One-shot restore runner. Triggered manually:
-  #   docker compose run --rm restore            # interactive confirm
-  #   docker compose run --rm restore -- --yes   # skip confirm (CI/automation)
-  # Stops the backend first (data files are locked while uvicorn holds them).
   restore:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
     command: python scripts/restore.py
     environment:
       - DATABASE_URL=sqlite:///app/data/main.db

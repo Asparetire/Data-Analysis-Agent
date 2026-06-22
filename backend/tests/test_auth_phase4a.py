@@ -25,7 +25,7 @@ def test_register_creates_user_and_hashes_password(users_db):
 def test_register_rejects_duplicate_email(users_db):
     auth_service.register("bob@example.com", "topsecret123")
     with pytest.raises(auth_service.EmailExists):
-        auth_service.register("bob@example.com", "other-password")
+        auth_service.register("bob@example.com", "other-password-456")
 
 
 def test_register_rejects_short_password(users_db):
@@ -126,6 +126,13 @@ def test_migrate_ownerless_data_creates_admin_and_stamps(users_db, monkeypatch):
     # Plant an ownerless entry directly in the sidecar.
     from app.services import metadata_service as ms
 
+    # Phase 6: the default MIGRATION_ADMIN_PASSWORD ("change-me-now") has no
+    # digits and would be rejected by the new complexity policy. Override
+    # to a valid value for the test.
+    monkeypatch.setattr(
+        auth_service.settings, "MIGRATION_ADMIN_PASSWORD", "migration-admin-pwd-001"
+    )
+
     with ms._lock:  # noqa: SLF001
         data = ms._load()
         data["ds-legacy"] = ms._normalize_entry({"display_name": "legacy"})
@@ -138,7 +145,10 @@ def test_migrate_ownerless_data_creates_admin_and_stamps(users_db, monkeypatch):
     assert metadata_service.get_owner("ds-legacy") == admin["id"]
 
 
-def test_migrate_ownerless_data_is_idempotent(users_db):
+def test_migrate_ownerless_data_is_idempotent(users_db, monkeypatch):
+    monkeypatch.setattr(
+        auth_service.settings, "MIGRATION_ADMIN_PASSWORD", "migration-admin-pwd-001"
+    )
     auth_service.migrate_ownerless_data()
     # Second run: admin already exists, no ownerless data left.
     stamped = auth_service.migrate_ownerless_data()
