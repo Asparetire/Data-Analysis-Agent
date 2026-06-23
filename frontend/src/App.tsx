@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Database,
   Home as HomeIcon,
@@ -26,6 +26,23 @@ import Auth from './pages/Auth';
 import ForceChangePassword from './pages/ForceChangePassword';
 import './App.css';
 
+const SIDEBAR_WIDTH_KEY = 'data-analysis-agent:sidebarWidth';
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 280;
+
+function readSidebarWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (!raw) return SIDEBAR_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return SIDEBAR_DEFAULT;
+    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
+  } catch {
+    return SIDEBAR_DEFAULT;
+  }
+}
+
 export default function App() {
   const page = useChatStore((s) => s.page);
   const setPage = useChatStore((s) => s.setPage);
@@ -33,19 +50,56 @@ export default function App() {
   const sessionId = useChatStore((s) => s.sessionId);
   const ensureSession = useChatStore((s) => s.ensureSession);
   const restoreSession = useChatStore((s) => s.restoreSession);
+  const newChat = useChatStore((s) => s.newChat);
   const { sendMessage } = useChat();
   const { status, reset } = useUpload();
-  const resetSession = useChatStore((s) => s.resetSession);
   const t = useT();
   const [theme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
+  const draggingRef = useRef(false);
 
-  const triggerNewChat = () => {
-    if (status === 'uploading') return;
-    void resetSession();
-    setPage('home');
+  // Apply sidebar width as a CSS variable so App.css grid can use it.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+
+  const onResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    let lastWidth = startWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + ev.clientX - startX));
+      lastWidth = next;
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try {
+        window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(lastWidth));
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
   };
+
+  const triggerNewChat = useCallback(() => {
+    if (status === 'uploading') return;
+    void newChat();
+    setPage('home');
+  }, [newChat, setPage, status]);
 
   // Phase 4A: bootstrap auth on mount. While status is loading we show a
   // splash; once it resolves to 'guest' we render the Auth page; only when
@@ -214,6 +268,13 @@ export default function App() {
           <div className="sidebar-backdrop" onClick={() => setDrawerOpen(false)} />
         ) : null}
         <Sidebar drawerOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <div
+          className="sidebar-resizer"
+          onMouseDown={onResizerMouseDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.resize')}
+        />
 
         <section className="chat-section">
           <ErrorBoundary>{<Page />}</ErrorBoundary>

@@ -10,6 +10,8 @@ import {
   Check,
   AlertTriangle,
   History,
+  Plus,
+  MessagesSquare,
 } from 'lucide-react';
 import { useChatStore } from '../../store/chatStore';
 import { getDataSources, renameDataSource } from '../../services/api';
@@ -41,6 +43,14 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
+type Tab = 'sources' | 'sessions';
+
+function sessionTitle(text: string | undefined | null): string {
+  if (!text) return '';
+  const firstLine = text.split('\n')[0].trim();
+  return firstLine.length > 30 ? `${firstLine.slice(0, 30)}…` : firstLine;
+}
+
 export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
   const t = useT();
   const dataSources = useChatStore((s) => s.dataSources);
@@ -52,10 +62,19 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
   const setBoundIds = useChatStore((s) => s.setBoundDataSourceIds);
   const uploadedFileName = useChatStore((s) => s.uploadedFileName);
 
+  const sessions = useChatStore((s) => s.sessions);
+  const loadSessions = useChatStore((s) => s.loadSessions);
+  const newChat = useChatStore((s) => s.newChat);
+  const switchSession = useChatStore((s) => s.switchSession);
+  const removeSession = useChatStore((s) => s.removeSession);
+  const currentSessionId = useChatStore((s) => s.sessionId);
+
+  const [tab, setTab] = useState<Tab>('sources');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [pendingSwitch, setPendingSwitch] = useState<SwitchPrompt | null>(null);
   const [lineageFor, setLineageFor] = useState<{ id: string; name: string } | null>(null);
+  const [busyNewChat, setBusyNewChat] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -73,6 +92,35 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
       alive = false;
     };
   }, [setDataSources, uploadedFileName]);
+
+  // Load the session list whenever the user opens the sessions tab so TTL'd
+  // sessions get pruned server-side and new ones show up without a manual
+  // refresh.
+  useEffect(() => {
+    if (tab === 'sessions') {
+      void loadSessions();
+    }
+  }, [tab, loadSessions]);
+
+  const onNewChat = async () => {
+    if (busyNewChat) return;
+    setBusyNewChat(true);
+    try {
+      await newChat();
+      onClose?.();
+    } finally {
+      setBusyNewChat(false);
+    }
+  };
+
+  const onSwitchSession = async (id: string) => {
+    if (id === currentSessionId) {
+      onClose?.();
+      return;
+    }
+    await switchSession(id);
+    onClose?.();
+  };
 
   const requestSwitch = (target: { id: string; name: string }) => {
     if (target.id === activeId) return;
@@ -161,146 +209,177 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
 
   return (
     <aside className={`sidebar ${drawerOpen ? 'open' : ''}`}>
-      <h2>{t('sidebar.sources')}</h2>
-      {activeId && activeName ? (
-        <div className="current-datasource">
-          <span className="ds-icon">
-            <Database size={16} />
-          </span>
-          <div className="ds-meta">
-            <div className="ds-name" title={activeName}>
-              {activeName}
-            </div>
-            <div className="ds-sub">
-              <CheckCircle2 size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
-              {t('sidebar.active')}
-              {boundIds.length > 1 ? (
-                <span
-                  className="bound-badge"
-                  title={boundIds
-                    .map((id) => dataSources.find((d) => d.id === id)?.name || id)
-                    .join(' / ')}
-                >
-                  {t('sidebar.attachedCount', { n: boundIds.length })}
-                </span>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="current-datasource" style={{ background: 'var(--color-bg)' }}>
-          <span className="ds-icon" style={{ background: 'var(--color-text-muted)' }}>
-            <Database size={16} />
-          </span>
-          <div className="ds-meta">
-            <div className="ds-name" style={{ color: 'var(--color-text-muted)' }}>
-              {t('sidebar.none')}
-            </div>
-            <div className="ds-sub">{t('sidebar.uploadFirst')}</div>
-          </div>
-        </div>
-      )}
+      <button type="button" className="new-chat-btn" onClick={onNewChat} disabled={busyNewChat}>
+        <Plus size={14} /> {t('sidebar.newChat')}
+      </button>
 
-      <div>
-        <h3>{t('sidebar.sources')}</h3>
-        {dataSources.length === 0 ? (
-          <p style={{ fontSize: 12, color: 'var(--color-text-muted)', margin: 0 }}>
-            {t('sidebar.historyEmpty')}
-          </p>
-        ) : (
-          <div className="datasource-list">
-            {dataSources.map((ds) => {
-              const isEditing = editingId === ds.id;
-              const isActive = activeId === ds.id;
-              const isAttached = !isActive && boundIds.includes(ds.id);
-              return (
-                <div
-                  key={ds.id}
-                  className={`datasource-item ${isActive ? 'active' : ''} ${isAttached ? 'attached' : ''}`}
-                >
-                  {isEditing ? (
-                    <>
-                      <TypeIcon type={ds.type} />
-                      <input
-                        className="ds-rename-input"
-                        autoFocus
-                        value={editingValue}
-                        onChange={(e) => setEditingValue(e.target.value)}
-                        onKeyDown={onEditKeyDown}
-                        onBlur={() => void saveEdit()}
-                        maxLength={200}
-                      />
-                      <button
-                        type="button"
-                        className="ds-row-action"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={() => void saveEdit()}
-                        title={t('sidebar.save')}
-                      >
-                        <Check size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        className="ds-row-action"
-                        onMouseDown={(e) => e.preventDefault()}
-                        onClick={cancelEdit}
-                        title={t('sidebar.cancel')}
-                      >
-                        <X size={12} />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="datasource-item-main"
-                        onClick={() => requestSwitch({ id: ds.id, name: ds.name })}
-                        title={ds.name}
-                      >
-                        <TypeIcon type={ds.type} />
-                        <span className="ds-name">{ds.name}</span>
-                        <span className="ds-type">{TYPE_LABEL[ds.type] || ds.type}</span>
-                      </button>
-                      {!isActive ? (
-                        <button
-                          type="button"
-                          className={`ds-row-action ${isAttached ? 'attached-mark' : ''}`}
-                          onClick={() => toggleAttach(ds.id)}
-                          title={isAttached ? t('sidebar.detach') : t('sidebar.attach')}
-                          aria-pressed={isAttached}
-                        >
-                          <CheckCircle2 size={11} />
-                        </button>
-                      ) : (
-                        <span className="ds-row-action" title={t('sidebar.primary')}>
-                          <CheckCircle2 size={11} />
-                        </span>
-                      )}
-                      <button
-                        type="button"
-                        className="ds-row-action"
-                        onClick={() => startEdit(ds)}
-                        title={t('sidebar.rename')}
-                      >
-                        <Pencil size={11} />
-                      </button>
-                      <button
-                        type="button"
-                        className="ds-row-action"
-                        onClick={() => setLineageFor({ id: ds.id, name: ds.name })}
-                        title={t('lineage.open')}
-                      >
-                        <History size={11} />
-                      </button>
-                      <DeleteButton id={ds.id} name={ds.name} />
-                    </>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+      <div className="sidebar-tabs">
+        <button
+          type="button"
+          className={tab === 'sources' ? 'active' : ''}
+          onClick={() => setTab('sources')}
+        >
+          <Database size={12} /> {t('sidebar.sources')}
+        </button>
+        <button
+          type="button"
+          className={tab === 'sessions' ? 'active' : ''}
+          onClick={() => setTab('sessions')}
+        >
+          <MessagesSquare size={12} /> {t('sidebar.sessions')}
+        </button>
       </div>
+
+      {tab === 'sources' ? (
+        <>
+          {activeId && activeName ? (
+            <div className="current-datasource">
+              <span className="ds-icon">
+                <Database size={16} />
+              </span>
+              <div className="ds-meta">
+                <div className="ds-name" title={activeName}>
+                  {activeName}
+                </div>
+                <div className="ds-sub">
+                  <CheckCircle2 size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
+                  {t('sidebar.active')}
+                  {boundIds.length > 1 ? (
+                    <span
+                      className="bound-badge"
+                      title={boundIds
+                        .map((id) => dataSources.find((d) => d.id === id)?.name || id)
+                        .join(' / ')}
+                    >
+                      {t('sidebar.attachedCount', { n: boundIds.length })}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="current-datasource" style={{ background: 'var(--color-bg)' }}>
+              <span className="ds-icon" style={{ background: 'var(--color-text-muted)' }}>
+                <Database size={16} />
+              </span>
+              <div className="ds-meta">
+                <div className="ds-name" style={{ color: 'var(--color-text-muted)' }}>
+                  {t('sidebar.none')}
+                </div>
+                <div className="ds-sub">{t('sidebar.uploadFirst')}</div>
+              </div>
+            </div>
+          )}
+
+          <div className="sidebar-section">
+            <h3>{t('sidebar.sources')}</h3>
+            {dataSources.length === 0 ? (
+              <p className="sidebar-empty">{t('sidebar.historyEmpty')}</p>
+            ) : (
+              <div className="datasource-list">
+                {dataSources.map((ds) => {
+                  const isEditing = editingId === ds.id;
+                  const isActive = activeId === ds.id;
+                  const isAttached = !isActive && boundIds.includes(ds.id);
+                  return (
+                    <div
+                      key={ds.id}
+                      className={`datasource-item ${isActive ? 'active' : ''} ${isAttached ? 'attached' : ''}`}
+                    >
+                      {isEditing ? (
+                        <>
+                          <TypeIcon type={ds.type} />
+                          <input
+                            className="ds-rename-input"
+                            autoFocus
+                            value={editingValue}
+                            onChange={(e) => setEditingValue(e.target.value)}
+                            onKeyDown={onEditKeyDown}
+                            onBlur={() => void saveEdit()}
+                            maxLength={200}
+                          />
+                          <button
+                            type="button"
+                            className="ds-row-action"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => void saveEdit()}
+                            title={t('sidebar.save')}
+                          >
+                            <Check size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            className="ds-row-action"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={cancelEdit}
+                            title={t('sidebar.cancel')}
+                          >
+                            <X size={12} />
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="datasource-item-main"
+                            onClick={() => requestSwitch({ id: ds.id, name: ds.name })}
+                            title={ds.name}
+                          >
+                            <TypeIcon type={ds.type} />
+                            <span className="ds-name">{ds.name}</span>
+                            <span className="ds-type">{TYPE_LABEL[ds.type] || ds.type}</span>
+                          </button>
+                          {!isActive ? (
+                            <button
+                              type="button"
+                              className={`ds-row-action ${isAttached ? 'attached-mark' : ''}`}
+                              onClick={() => toggleAttach(ds.id)}
+                              title={isAttached ? t('sidebar.detach') : t('sidebar.attach')}
+                              aria-pressed={isAttached}
+                            >
+                              <CheckCircle2 size={11} />
+                            </button>
+                          ) : (
+                            <span className="ds-row-action" title={t('sidebar.primary')}>
+                              <CheckCircle2 size={11} />
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            className="ds-row-action"
+                            onClick={() => startEdit(ds)}
+                            title={t('sidebar.rename')}
+                          >
+                            <Pencil size={11} />
+                          </button>
+                          <button
+                            type="button"
+                            className="ds-row-action"
+                            onClick={() => setLineageFor({ id: ds.id, name: ds.name })}
+                            title={t('lineage.open')}
+                          >
+                            <History size={11} />
+                          </button>
+                          <DeleteButton id={ds.id} name={ds.name} />
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </>
+      ) : (
+        <SessionList
+          sessions={sessions}
+          currentId={currentSessionId}
+          dataSources={dataSources}
+          onSwitch={onSwitchSession}
+          onDelete={removeSession}
+          onRefresh={loadSessions}
+        />
+      )}
 
       {pendingSwitch ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true">
@@ -337,6 +416,122 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
       ) : null}
     </aside>
   );
+}
+
+function SessionList({
+  sessions,
+  currentId,
+  dataSources,
+  onSwitch,
+  onDelete,
+  onRefresh,
+}: {
+  sessions: ReturnType<typeof useChatStore.getState>['sessions'];
+  currentId: string | null;
+  dataSources: ReturnType<typeof useChatStore.getState>['dataSources'];
+  onSwitch: (id: string) => void;
+  onDelete: (id: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+}) {
+  const t = useT();
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const onDeleteClick = async (id: string, title: string) => {
+    if (!window.confirm(t('sidebar.deleteSessionConfirm', { name: title || id.slice(0, 8) }))) {
+      return;
+    }
+    setBusyId(id);
+    try {
+      await onDelete(id);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (sessions.length === 0) {
+    return (
+      <div className="sidebar-section">
+        <div className="sidebar-empty-block">
+          <MessagesSquare size={24} />
+          <p>{t('sidebar.sessionsEmpty')}</p>
+          <button type="button" className="btn-secondary" onClick={() => void onRefresh()}>
+            {t('sidebar.refresh')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="sidebar-section">
+      <div className="sidebar-section-head">
+        <h3>{t('sidebar.sessions')}</h3>
+        <button
+          type="button"
+          className="ds-row-action"
+          onClick={() => void onRefresh()}
+          title={t('sidebar.refresh')}
+        >
+          <History size={11} />
+        </button>
+      </div>
+      <div className="session-list">
+        {sessions.map((s) => {
+          const firstUser = (s.chat_history || []).find((m) => m.role === 'user');
+          const title = sessionTitle(firstUser?.content) || t('sidebar.untitledSession');
+          const isActive = s.session_id === currentId;
+          const dsName = s.data_source_id
+            ? dataSources.find((d) => d.id === s.data_source_id)?.name
+            : undefined;
+          return (
+            <div key={s.session_id} className={`session-item ${isActive ? 'active' : ''}`}>
+              <button
+                type="button"
+                className="session-item-main"
+                onClick={() => onSwitch(s.session_id)}
+                title={title}
+              >
+                <div className="session-title">{title}</div>
+                <div className="session-sub">
+                  {dsName ? <span className="session-ds">{dsName}</span> : null}
+                  {s.updated_at ? (
+                    <span className="session-time">{formatSessionTime(s.updated_at)}</span>
+                  ) : null}
+                </div>
+              </button>
+              <button
+                type="button"
+                className="ds-row-action ds-row-action-danger"
+                onClick={() => onDeleteClick(s.session_id, title)}
+                disabled={busyId === s.session_id}
+                title={t('sidebar.delete')}
+              >
+                <Trash2 size={11} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function formatSessionTime(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if (sameDay) {
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+    const diff = (now.getTime() - d.getTime()) / 86400000;
+    if (diff < 7) {
+      return `${Math.floor(diff)}d`;
+    }
+    return d.toLocaleDateString([], { month: '2-digit', day: '2-digit' });
+  } catch {
+    return '';
+  }
 }
 
 function DeleteButton({ id, name }: { id: string; name: string }) {

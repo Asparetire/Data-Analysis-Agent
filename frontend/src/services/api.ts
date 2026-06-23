@@ -179,6 +179,11 @@ export const createSession = async () => {
   return response.data;
 };
 
+export const listSessions = async () => {
+  const response = await api.get<SessionView[]>('/sessions');
+  return response.data;
+};
+
 export const getSession = async (sessionId: string) => {
   const response = await api.get<SessionView>(`/sessions/${sessionId}`);
   return response.data;

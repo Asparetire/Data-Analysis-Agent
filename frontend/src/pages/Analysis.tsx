@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -19,6 +21,24 @@ import { fetchRows, listTables, schemaDataSource, type RowsPage } from '../servi
 import { useT } from '../hooks/useUi';
 
 const PAGE_SIZE = 20;
+
+const RIGHT_PANEL_KEY = 'data-analysis-agent:rightPanelCollapsed';
+
+function readRightCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(RIGHT_PANEL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeRightCollapsed(v: boolean) {
+  try {
+    window.localStorage.setItem(RIGHT_PANEL_KEY, v ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
 
 interface TableMeta {
   name: string;
@@ -46,6 +66,15 @@ export default function Analysis() {
   const [sort, setSort] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [pageState, setPageState] = useState<PageState>({ loading: false, data: null });
+  const [collapsed, setCollapsed] = useState<boolean>(() => readRightCollapsed());
+
+  const toggleCollapsed = () => {
+    setCollapsed((v) => {
+      const next = !v;
+      writeRightCollapsed(next);
+      return next;
+    });
+  };
 
   // Load the table list + pick the primary table when the data source changes.
   useEffect(() => {
@@ -165,9 +194,11 @@ export default function Analysis() {
           tableCount={tables.length}
           rowCount={totalRows}
           schemaCount={columns.length}
+          collapsed={collapsed}
+          onToggleCollapse={toggleCollapsed}
         />
 
-        {!activeId ? (
+        {collapsed ? null : !activeId ? (
           <EmptyState />
         ) : tablesLoading ? (
           <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
@@ -255,11 +286,15 @@ function Header({
   tableCount,
   rowCount,
   schemaCount,
+  collapsed,
+  onToggleCollapse,
 }: {
   name?: string;
   tableCount: number;
   rowCount: number;
   schemaCount: number;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const t = useT();
   return (
@@ -281,6 +316,29 @@ function Header({
           </span>
           <span>{t('analysis.tableRows', { n: rowCount })}</span>
         </div>
+      ) : null}
+      {name ? (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          title={collapsed ? t('analysis.expand') : t('analysis.collapse')}
+          style={{
+            marginLeft: 'auto',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '4px 10px',
+            fontSize: 12,
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+            background: 'var(--color-surface)',
+            color: 'var(--color-text-muted)',
+            cursor: 'pointer',
+          }}
+        >
+          {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          {collapsed ? t('analysis.expand') : t('analysis.collapse')}
+        </button>
       ) : null}
     </div>
   );

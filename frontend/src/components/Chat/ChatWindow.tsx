@@ -19,6 +19,7 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
   const activeName = useChatStore((s) => s.activeDataSourceName);
   const dataSources = useChatStore((s) => s.dataSources);
   const boundIds = useChatStore((s) => s.boundDataSourceIds);
+  const sessionCreatedAt = useChatStore((s) => s.sessionCreatedAt);
   const t = useT();
   const [value, setValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
@@ -34,7 +35,10 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    // Auto-grow up to 200px, then hand control to the user via the native
+    // resize handle. Beyond 200px the textarea becomes scrollable until the
+    // user drags the handle, at which point they own the height.
+    el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
   }, [value]);
 
   const submit = () => {
@@ -100,6 +104,9 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
             {dataSourceId && activeName
               ? t('chat.currentDataSource', { name: activeName })
               : t('chat.noDataSource')}
+            {sessionCreatedAt ? (
+              <span className="session-time">· {formatSessionHeader(sessionCreatedAt)}</span>
+            ) : null}
             {boundNames.length > 1 ? (
               <span
                 className="bound-chips"
@@ -328,4 +335,18 @@ function isChartOption(value: unknown): boolean {
     Array.isArray(v.series) &&
     (v.xAxis !== undefined || v.series.some((s) => (s as { type?: string }).type === 'pie'))
   );
+}
+
+function formatSessionHeader(iso: string): string {
+  try {
+    const d = new Date(iso);
+    return d.toLocaleString([], {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  } catch {
+    return '';
+  }
 }
