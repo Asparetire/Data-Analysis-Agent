@@ -312,14 +312,48 @@ export async function* streamChat(
       token = newToken;
       headers.Authorization = `Bearer ${newToken}`;
       response = await doFetch();
+    } else {
+      // Refresh failed — session is gone. Surface a friendly message instead
+      // of the raw 401 body, and let the auth store redirect to login.
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 401,
+          message: '登录已过期，请重新登录',
+        },
+      };
+      return;
     }
   }
 
   if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`;
+    // Map common HTTP codes to readable Chinese so the user isn't staring
+    // at a JSON detail blob. The raw text is still appended for rare cases
+    // where the operator needs the server's exact wording.
+    const friendly: Record<number, string> = {
+      403: '没有权限执行此操作',
+      404: '资源不存在或已被删除',
+      413: '文件过大',
+      422: '请求参数有误',
+      429: '请求过于频繁，请稍后再试',
+      500: '服务器内部错误，请稍后重试',
+      502: '上游服务异常',
+      503: '服务暂不可用',
+      504: '请求超时',
+    };
+    let detail = friendly[response.status] || `请求失败 (HTTP ${response.status})`;
     try {
       const text = await response.text();
-      if (text) detail += `: ${text}`;
+      if (text) {
+        // Try to extract FastAPI's {"detail": "..."} shape; fall back to raw.
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed?.detail) detail += `：${parsed.detail}`;
+        } catch {
+          detail += `：${text.slice(0, 200)}`;
+        }
+      }
     } catch {
       /* ignore */
     }

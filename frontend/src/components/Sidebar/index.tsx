@@ -181,7 +181,7 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
                     .map((id) => dataSources.find((d) => d.id === id)?.name || id)
                     .join(' / ')}
                 >
-                  {boundIds.length} 已绑
+                  {t('sidebar.attachedCount', { n: boundIds.length })}
                 </span>
               ) : null}
             </div>
@@ -266,13 +266,13 @@ export default function Sidebar({ drawerOpen = false, onClose }: SidebarProps) {
                           type="button"
                           className={`ds-row-action ${isAttached ? 'attached-mark' : ''}`}
                           onClick={() => toggleAttach(ds.id)}
-                          title={isAttached ? '取消附加' : '附加到当前会话(JOIN)'}
+                          title={isAttached ? t('sidebar.detach') : t('sidebar.attach')}
                           aria-pressed={isAttached}
                         >
                           <CheckCircle2 size={11} />
                         </button>
                       ) : (
-                        <span className="ds-row-action" title="当前主源">
+                        <span className="ds-row-action" title={t('sidebar.primary')}>
                           <CheckCircle2 size={11} />
                         </span>
                       )}

@@ -184,8 +184,8 @@ export default function App() {
             onClick={() => {
               void logout();
             }}
-            title="退出登录"
-            aria-label="退出登录"
+            title={t('nav.logout')}
+            aria-label={t('nav.logout')}
           >
             <LogOut size={16} />
           </button>
