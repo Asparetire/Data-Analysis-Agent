@@ -100,6 +100,13 @@ export const getCurrentUser = async () => {
   return resp.data;
 };
 
+export const changePassword = async (oldPassword: string, newPassword: string) => {
+  await api.post('/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+};
+
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -299,7 +306,33 @@ export async function* streamChat(
   // actually closes when the user cancels. Without this the backend keeps
   // running the graph (and burning LLM tokens) until it finishes — the
   // previous "abort" only stopped the client from iterating events.
-  let response = await doFetch();
+  let response: Response;
+  try {
+    response = await doFetch();
+  } catch (err) {
+    // Network error during connection setup (DNS, TCP, TLS, CORS preflight).
+    // Distinguish from user abort — abort should propagate, network blips
+    // deserve one retry before we surface an error to the chat bubble.
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw err;
+    }
+    // One retry after a short backoff. If it still fails, yield an error
+    // event so the user sees something readable instead of a raw TypeError.
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      response = await doFetch();
+    } catch (err2) {
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 0,
+          message: '网络连接失败，请检查网络后重试',
+        },
+      };
+      return;
+    }
+  }
 
   // SSE bypasses the axios interceptor (we use fetch for streaming), so we
   // handle the 401-expired-token case here: rotate the refresh token once,
@@ -395,6 +428,23 @@ export async function* streamChat(
     if (buffer.trim()) {
       const event = parseEventBlock(buffer);
       if (event) yield event;
+    }
+  } catch (err) {
+    // Stream interrupted mid-flight (network drop, server closed connection
+    // without a proper end event). Distinguish from user abort — abort is
+    // silent, network errors surface a readable message so the user knows
+    // the answer was cut off.
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      // no-op — the abort handler in useChat already marked the bubble.
+    } else {
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 0,
+          message: '连接中断，回答可能不完整。请重新提问或刷新重试',
+        },
+      };
     }
   } finally {
     try {

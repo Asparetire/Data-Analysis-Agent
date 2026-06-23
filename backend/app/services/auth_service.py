@@ -65,17 +65,29 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     password_hash TEXT NOT NULL,
     is_active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    must_change_password INTEGER NOT NULL DEFAULT 0
 )
 """
 
 
 def init_users_table() -> None:
-    """Create the users table if missing. Idempotent."""
+    """Create the users table if missing. Idempotent.
+
+    Also backfills the ``must_change_password`` column on pre-existing tables
+    — older deployments created the table without it, and SQLite's
+    ``ALTER TABLE ADD COLUMN`` is safe here because the column has a default.
+    """
     engine = get_engine(None)
     with engine.begin() as conn:
         conn.execute(text(_INIT_USERS_SQL))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)"))
+        # Add column if missing (existing DBs from before Phase 6).
+        cols = {r[1] for r in conn.execute(text("PRAGMA table_info(users)")).fetchall()}
+        if "must_change_password" not in cols:
+            conn.execute(
+                text("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0")
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +124,7 @@ def _row_to_user(row: Any) -> dict | None:
         "password_hash": row[2],
         "is_active": bool(row[3]),
         "created_at": row[4],
+        "must_change_password": bool(row[5]) if len(row) > 5 else False,
     }
 
 
@@ -120,7 +133,8 @@ def get_user(user_id: str) -> dict | None:
     with engine.begin() as conn:
         row = conn.execute(
             text(
-                "SELECT id, email, password_hash, is_active, created_at FROM users WHERE id = :id"
+                "SELECT id, email, password_hash, is_active, created_at, must_change_password "
+                "FROM users WHERE id = :id"
             ),
             {"id": user_id},
         ).first()
@@ -132,7 +146,8 @@ def get_user_by_email(email: str) -> dict | None:
     with engine.begin() as conn:
         row = conn.execute(
             text(
-                "SELECT id, email, password_hash, is_active, created_at FROM users WHERE email = :e"
+                "SELECT id, email, password_hash, is_active, created_at, must_change_password "
+                "FROM users WHERE email = :e"
             ),
             {"e": _normalize_email(email)},
         ).first()
@@ -146,8 +161,13 @@ def list_user_ids() -> list[str]:
     return [r[0] for r in rows]
 
 
-def register(email: str, password: str) -> dict:
-    """Create a new user. Returns {id, email}. Raises on duplicate / weak password."""
+def register(email: str, password: str, *, must_change_password: bool = False) -> dict:
+    """Create a new user. Returns {id, email}. Raises on duplicate / weak password.
+
+    ``must_change_password`` is set True for the migration admin (whose
+    password is the committed default) so the frontend can force a password
+    change on first login. Regular registrations pass False.
+    """
     if not email or not password:
         raise InvalidCredentials("Email and password are required")
     if len(password) < 8:
@@ -173,14 +193,15 @@ def register(email: str, password: str) -> dict:
         user_id = str(uuid.uuid4())
         conn.execute(
             text(
-                "INSERT INTO users (id, email, password_hash, is_active, created_at) "
-                "VALUES (:id, :email, :hash, 1, :ts)"
+                "INSERT INTO users (id, email, password_hash, is_active, created_at, must_change_password) "
+                "VALUES (:id, :email, :hash, 1, :ts, :mcp)"
             ),
             {
                 "id": user_id,
                 "email": email,
                 "hash": _hash_password(password),
                 "ts": _iso(_utcnow()),
+                "mcp": 1 if must_change_password else 0,
             },
         )
     return {"id": user_id, "email": email}
@@ -193,7 +214,43 @@ def authenticate(email: str, password: str) -> dict:
         raise InvalidCredentials("Invalid email or password")
     if not user["is_active"]:
         raise InvalidCredentials("Account is disabled")
-    return {"id": user["id"], "email": user["email"], "is_active": user["is_active"]}
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "is_active": user["is_active"],
+        "must_change_password": user.get("must_change_password", False),
+    }
+
+
+def change_password(user_id: str, old_password: str, new_password: str) -> None:
+    """Verify old password, set new password, clear must_change_password.
+
+    Used by the force-change-password flow on first admin login. Raises
+    InvalidCredentials if the old password is wrong or the new one fails
+    the complexity check.
+    """
+    user = get_user(user_id)
+    if user is None:
+        raise InvalidCredentials("User not found")
+    if not _verify_password(old_password, user["password_hash"]):
+        raise InvalidCredentials("Old password is incorrect")
+    # Re-run the same complexity rules as register() so the new password
+    # can't be weaker than the registration policy.
+    if len(new_password) < 8:
+        raise InvalidCredentials("Password must be at least 8 characters")
+    if not getattr(settings, "LLM_MOCK", False):
+        has_letter = any(c.isalpha() for c in new_password)
+        has_digit = any(c.isdigit() for c in new_password)
+        if not (has_letter and has_digit):
+            raise InvalidCredentials("Password must contain both letters and digits")
+    if old_password == new_password:
+        raise InvalidCredentials("New password must differ from the old one")
+    engine = get_engine(None)
+    with engine.begin() as conn:
+        conn.execute(
+            text("UPDATE users SET password_hash = :h, must_change_password = 0 WHERE id = :id"),
+            {"h": _hash_password(new_password), "id": user_id},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -335,7 +392,11 @@ def migrate_ownerless_data() -> int:
         # existing data is reachable. If there's no existing data at all
         # we still create the admin so tests / dev can log in immediately.
         try:
-            register(settings.MIGRATION_ADMIN_EMAIL, settings.MIGRATION_ADMIN_PASSWORD)
+            register(
+                settings.MIGRATION_ADMIN_EMAIL,
+                settings.MIGRATION_ADMIN_PASSWORD,
+                must_change_password=True,
+            )
             logger.warning(
                 "Created migration admin %s — change its password immediately.",
                 settings.MIGRATION_ADMIN_EMAIL,
@@ -349,7 +410,11 @@ def migrate_ownerless_data() -> int:
         # first /auth/register call landed before startup finished). Create
         # the admin now so ownerless data has a valid owner to stamp.
         try:
-            register(settings.MIGRATION_ADMIN_EMAIL, settings.MIGRATION_ADMIN_PASSWORD)
+            register(
+                settings.MIGRATION_ADMIN_EMAIL,
+                settings.MIGRATION_ADMIN_PASSWORD,
+                must_change_password=True,
+            )
             logger.warning(
                 "Created migration admin %s — change its password immediately.",
                 settings.MIGRATION_ADMIN_EMAIL,

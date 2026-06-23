@@ -23,6 +23,7 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import Auth from './pages/Auth';
+import ForceChangePassword from './pages/ForceChangePassword';
 import './App.css';
 
 export default function App() {
@@ -114,6 +115,13 @@ export default function App() {
 
   if (authStatus !== 'authed') {
     return <Auth />;
+  }
+
+  // Force password change on first login (admin created by migration, or any
+  // user flagged must_change_password). Block the main UI until the user
+  // sets a fresh password — prevents operating with the committed default.
+  if (authUser?.must_change_password) {
+    return <ForceChangePassword />;
   }
 
   return (

@@ -66,6 +66,14 @@ export default function ChatWindow({ dataSourceId }: ChatWindowProps) {
         return;
       }
       if (e.key === 'Enter') {
+        // Skip when the user is typing in another input (e.g. a rename field
+        // in the sidebar, the login form). Otherwise Ctrl+Enter would send
+        // the chat draft while the user is editing something else.
+        const t = e.target as HTMLElement | null;
+        const tag = t?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA') {
+          if (t !== textareaRef.current) return;
+        }
         e.preventDefault();
         submit();
       }
@@ -209,13 +217,27 @@ function MessageBubble({ message, isLive, canRegenerate, onRegenerate }: Message
     downloadDataURL(`chart-${ts}.png`, url);
   };
 
+  // Auto-collapse long assistant messages. Threshold is character count so
+  // it triggers before the DOM measures height (avoids layout thrash). User
+  // messages stay uncollapsed — they're usually short and the user authored
+  // them, so no surprise.
+  const text = message.content || '';
+  const LONG_THRESHOLD = 600;
+  const isLong = !isUser && !isLive && text.length > LONG_THRESHOLD;
+  const [expanded, setExpanded] = useState(false);
+
   return (
     <div className={`message ${isUser ? 'user-message' : 'assistant-message'}`}>
       <div className="message-content">
-        <p className={isLive ? 'live' : undefined}>
+        <p className={`${isLive ? 'live' : ''} ${isLong && !expanded ? 'collapsible' : ''}`.trim()}>
           {message.content || (isUser ? '' : t('chat.emptyReply'))}
           {isLive ? <span className="caret">▍</span> : null}
         </p>
+        {isLong ? (
+          <button type="button" className="collapse-toggle" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? t('chat.collapse') : t('chat.expand', { n: text.length })}
+          </button>
+        ) : null}
 
         {message.sqlQuery ? (
           <>

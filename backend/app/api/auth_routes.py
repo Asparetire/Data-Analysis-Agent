@@ -16,6 +16,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from ..models.schemas import (
+    ChangePasswordRequest,
     RefreshRequest,
     TokenResponse,
     UserLogin,
@@ -69,4 +70,19 @@ async def logout(body: RefreshRequest):
 
 @router.get("/me", response_model=UserView)
 async def me(user: dict = Depends(current_user)):
-    return UserView(id=user["id"], email=user["email"], is_active=user["is_active"])
+    return UserView(
+        id=user["id"],
+        email=user["email"],
+        is_active=user["is_active"],
+        must_change_password=user.get("must_change_password", False),
+    )
+
+
+@router.post("/change-password", status_code=204)
+async def change_password(body: ChangePasswordRequest, user: dict = Depends(current_user)):
+    try:
+        auth_service.change_password(user["id"], body.old_password, body.new_password)
+    except auth_service.AuthError as e:
+        raise auth_error_to_http(e) from e
+    logger.info("user %s changed password", user["email"])
+    return None

@@ -101,6 +101,37 @@
   border-color: var(--color-danger-border);
 }
 
+.message-content p.collapsible {
+  max-height: 12em;
+  overflow: hidden;
+  position: relative;
+}
+.message-content p.collapsible::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.5em;
+  background: linear-gradient(transparent, var(--color-surface));
+  pointer-events: none;
+}
+
+.collapse-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.collapse-toggle:hover {
+  color: var(--color-primary-hover, var(--color-primary));
+}
+
 .sql-block {
   margin: 10px 0 0 0;
   padding: 10px 12px;

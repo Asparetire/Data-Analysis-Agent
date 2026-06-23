@@ -170,7 +170,40 @@ export default function Analysis() {
         {!activeId ? (
           <EmptyState />
         ) : tablesLoading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>{t('analysis.loading')}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
+            <div
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: 12,
+              }}
+            >
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="skeleton-bar"
+                  style={{ width: '80%', margin: '6px 0', height: 14 }}
+                />
+              ))}
+            </div>
+            <div
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: 12,
+              }}
+            >
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="skeleton-bar"
+                  style={{ width: `${60 + (i % 4) * 10}%`, margin: '6px 0', height: 12 }}
+                />
+              ))}
+            </div>
+          </div>
         ) : pageState.error && !activeTable ? (
           <div className="upload-error">{t('analysis.error', { err: pageState.error })}</div>
         ) : (
@@ -468,14 +501,27 @@ function DataTable({
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td
-                  colSpan={columns.length}
-                  style={{ padding: 16, color: 'var(--color-text-muted)', textAlign: 'center' }}
-                >
-                  {t('analysis.loading')}
-                </td>
-              </tr>
+              // Skeleton rows: 8 placeholder rows with shimmer bars. Gives
+              // the user a visual anchor that data is loading rather than a
+              // single "loading…" cell which looks like an empty table.
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`skeleton-${i}`}>
+                  {columns.map((c, j) => (
+                    <td
+                      key={c || j}
+                      style={{
+                        padding: '6px 8px',
+                        borderBottom: '1px solid var(--color-border)',
+                      }}
+                    >
+                      <div
+                        className="skeleton-bar"
+                        style={{ width: `${60 + ((i + j) % 4) * 10}%` }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))
             ) : rows.length === 0 ? (
               <tr>
                 <td
