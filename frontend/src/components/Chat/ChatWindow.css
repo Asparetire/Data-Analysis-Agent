@@ -27,6 +27,11 @@
   color: var(--color-text-muted);
 }
 
+.chat-header .subtitle .session-time {
+  margin-left: 6px;
+  opacity: 0.7;
+}
+
 .chat-header .clear-btn {
   display: inline-flex;
   align-items: center;
@@ -99,6 +104,37 @@
   background: var(--color-danger-soft);
   color: var(--color-danger);
   border-color: var(--color-danger-border);
+}
+
+.message-content p.collapsible {
+  max-height: 12em;
+  overflow: hidden;
+  position: relative;
+}
+.message-content p.collapsible::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.5em;
+  background: linear-gradient(transparent, var(--color-surface));
+  pointer-events: none;
+}
+
+.collapse-toggle {
+  display: inline-block;
+  margin-top: 6px;
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--color-primary);
+  cursor: pointer;
+  text-decoration: underline;
+}
+.collapse-toggle:hover {
+  color: var(--color-primary-hover, var(--color-primary));
 }
 
 .sql-block {
@@ -184,9 +220,12 @@
 
 .chat-input-form textarea {
   flex: 1;
-  resize: none;
+  /* resize: vertical lets the user drag the bottom-right handle to grow the
+     box beyond the auto-grow ceiling (200px). auto-grow still handles the
+     common short-message case; once the user drags, they own the height. */
+  resize: vertical;
   min-height: 40px;
-  max-height: 160px;
+  max-height: 60vh;
   padding: 10px 12px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
@@ -196,6 +235,7 @@
   color: var(--color-text);
   background: var(--color-surface);
   outline: none;
+  overflow-y: auto;
   transition:
     border-color 0.15s,
     box-shadow 0.15s;

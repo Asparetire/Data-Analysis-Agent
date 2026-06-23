@@ -82,6 +82,7 @@ export interface UserView {
   id: string;
   email: string;
   is_active: boolean;
+  must_change_password: boolean;
 }
 
 export interface TokenResponse {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Database,
   Home as HomeIcon,
@@ -9,6 +9,8 @@ import {
   Menu,
   X,
   LogOut,
+  Plus,
+  Upload as UploadIcon,
 } from 'lucide-react';
 import { useChatStore, type PageKey } from './store/chatStore';
 import { useAuthStore } from './store/authStore';
@@ -21,21 +23,83 @@ import ErrorBoundary from './components/ErrorBoundary';
 import Home from './pages/Home';
 import Analysis from './pages/Analysis';
 import Auth from './pages/Auth';
+import ForceChangePassword from './pages/ForceChangePassword';
 import './App.css';
+
+const SIDEBAR_WIDTH_KEY = 'data-analysis-agent:sidebarWidth';
+const SIDEBAR_MIN = 240;
+const SIDEBAR_MAX = 480;
+const SIDEBAR_DEFAULT = 280;
+
+function readSidebarWidth(): number {
+  try {
+    const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+    if (!raw) return SIDEBAR_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return SIDEBAR_DEFAULT;
+    return Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, n));
+  } catch {
+    return SIDEBAR_DEFAULT;
+  }
+}
 
 export default function App() {
   const page = useChatStore((s) => s.page);
   const setPage = useChatStore((s) => s.setPage);
   const activeId = useChatStore((s) => s.activeDataSourceId);
-  const setActive = useChatStore((s) => s.setActiveDataSource);
   const sessionId = useChatStore((s) => s.sessionId);
   const ensureSession = useChatStore((s) => s.ensureSession);
   const restoreSession = useChatStore((s) => s.restoreSession);
+  const newChat = useChatStore((s) => s.newChat);
   const { sendMessage } = useChat();
   const { status, reset } = useUpload();
   const t = useT();
   const [theme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => readSidebarWidth());
+  const draggingRef = useRef(false);
+
+  // Apply sidebar width as a CSS variable so App.css grid can use it.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`);
+  }, [sidebarWidth]);
+
+  const onResizerMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    let lastWidth = startWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!draggingRef.current) return;
+      const next = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, startWidth + ev.clientX - startX));
+      lastWidth = next;
+      setSidebarWidth(next);
+    };
+    const onUp = () => {
+      draggingRef.current = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      try {
+        window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(lastWidth));
+      } catch {
+        /* ignore */
+      }
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  const triggerNewChat = useCallback(() => {
+    if (status === 'uploading') return;
+    void newChat();
+    setPage('home');
+  }, [newChat, setPage, status]);
 
   // Phase 4A: bootstrap auth on mount. While status is loading we show a
   // splash; once it resolves to 'guest' we render the Auth page; only when
@@ -107,6 +171,13 @@ export default function App() {
     return <Auth />;
   }
 
+  // Force password change on first login (admin created by migration, or any
+  // user flagged must_change_password). Block the main UI until the user
+  // sets a fresh password — prevents operating with the committed default.
+  if (authUser?.must_change_password) {
+    return <ForceChangePassword />;
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -127,6 +198,25 @@ export default function App() {
               </button>
             ))}
           </nav>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setUploadOpen(true)}
+            title={t('nav.upload')}
+            aria-label={t('nav.upload')}
+            disabled={status === 'uploading'}
+          >
+            <UploadIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={triggerNewChat}
+            title={t('nav.newChat')}
+            aria-label={t('nav.newChat')}
+          >
+            <Plus size={16} />
+          </button>
           {authUser ? (
             <span className="auth-user" title={authUser.email}>
               {authUser.email}
@@ -156,8 +246,8 @@ export default function App() {
             onClick={() => {
               void logout();
             }}
-            title="退出登录"
-            aria-label="退出登录"
+            title={t('nav.logout')}
+            aria-label={t('nav.logout')}
           >
             <LogOut size={16} />
           </button>
@@ -178,24 +268,15 @@ export default function App() {
           <div className="sidebar-backdrop" onClick={() => setDrawerOpen(false)} />
         ) : null}
         <Sidebar drawerOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
+        <div
+          className="sidebar-resizer"
+          onMouseDown={onResizerMouseDown}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t('sidebar.resize')}
+        />
 
         <section className="chat-section">
-          {page === 'home' && !activeId && (status === 'idle' || status === 'error') ? (
-            <div
-              style={{
-                padding: 20,
-                borderBottom: '1px solid var(--color-border)',
-                background: 'var(--color-surface)',
-              }}
-            >
-              <FileUpload
-                onUploadSuccess={(fileId, filename) => {
-                  setActive({ id: fileId, name: filename });
-                }}
-              />
-            </div>
-          ) : null}
-
           <ErrorBoundary>{<Page />}</ErrorBoundary>
 
           {status === 'uploading' ? (
@@ -234,6 +315,38 @@ export default function App() {
           ) : null}
         </section>
       </main>
+
+      {uploadOpen ? (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => status !== 'uploading' && setUploadOpen(false)}
+        >
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="modal-title" style={{ justifyContent: 'space-between' }}>
+              <span>{t('nav.upload')}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => status !== 'uploading' && setUploadOpen(false)}
+                aria-label={t('common.cancel')}
+                disabled={status === 'uploading'}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <FileUpload
+                onUploadSuccess={() => {
+                  setUploadOpen(false);
+                  setPage('home');
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -100,6 +100,13 @@ export const getCurrentUser = async () => {
   return resp.data;
 };
 
+export const changePassword = async (oldPassword: string, newPassword: string) => {
+  await api.post('/auth/change-password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  });
+};
+
 export const uploadFile = async (file: File) => {
   const formData = new FormData();
   formData.append('file', file);
@@ -169,6 +176,11 @@ export const listTables = async (id: string) => {
 
 export const createSession = async () => {
   const response = await api.post<SessionView>('/sessions');
+  return response.data;
+};
+
+export const listSessions = async () => {
+  const response = await api.get<SessionView[]>('/sessions');
   return response.data;
 };
 
@@ -277,28 +289,109 @@ export async function* streamChat(
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
   };
-  try {
-    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
-    if (token) headers.Authorization = `Bearer ${token}`;
-  } catch {
-    /* ignore */
-  }
+  const readToken = () => {
+    try {
+      return window.localStorage.getItem('data-analysis-agent:accessToken');
+    } catch {
+      return null;
+    }
+  };
+  let token = readToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const doFetch = () =>
+    fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+
   // Phase 6: pass the abort signal through to fetch so the TCP connection
   // actually closes when the user cancels. Without this the backend keeps
   // running the graph (and burning LLM tokens) until it finishes — the
   // previous "abort" only stopped the client from iterating events.
-  const response = await fetch(`${API_BASE_URL}/chat/stream`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
+  let response: Response;
+  try {
+    response = await doFetch();
+  } catch (err) {
+    // Network error during connection setup (DNS, TCP, TLS, CORS preflight).
+    // Distinguish from user abort — abort should propagate, network blips
+    // deserve one retry before we surface an error to the chat bubble.
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      throw err;
+    }
+    // One retry after a short backoff. If it still fails, yield an error
+    // event so the user sees something readable instead of a raw TypeError.
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      response = await doFetch();
+    } catch (err2) {
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 0,
+          message: '网络连接失败，请检查网络后重试',
+        },
+      };
+      return;
+    }
+  }
+
+  // SSE bypasses the axios interceptor (we use fetch for streaming), so we
+  // handle the 401-expired-token case here: rotate the refresh token once,
+  // then retry the stream. Matches what the axios interceptor does for
+  // regular requests.
+  if (response.status === 401) {
+    const { useAuthStore } = await import('../store/authStore');
+    const newToken = await useAuthStore.getState().tryRefresh();
+    if (newToken) {
+      token = newToken;
+      headers.Authorization = `Bearer ${newToken}`;
+      response = await doFetch();
+    } else {
+      // Refresh failed — session is gone. Surface a friendly message instead
+      // of the raw 401 body, and let the auth store redirect to login.
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 401,
+          message: '登录已过期，请重新登录',
+        },
+      };
+      return;
+    }
+  }
 
   if (!response.ok || !response.body) {
-    let detail = `HTTP ${response.status}`;
+    // Map common HTTP codes to readable Chinese so the user isn't staring
+    // at a JSON detail blob. The raw text is still appended for rare cases
+    // where the operator needs the server's exact wording.
+    const friendly: Record<number, string> = {
+      403: '没有权限执行此操作',
+      404: '资源不存在或已被删除',
+      413: '文件过大',
+      422: '请求参数有误',
+      429: '请求过于频繁，请稍后再试',
+      500: '服务器内部错误，请稍后重试',
+      502: '上游服务异常',
+      503: '服务暂不可用',
+      504: '请求超时',
+    };
+    let detail = friendly[response.status] || `请求失败 (HTTP ${response.status})`;
     try {
       const text = await response.text();
-      if (text) detail += `: ${text}`;
+      if (text) {
+        // Try to extract FastAPI's {"detail": "..."} shape; fall back to raw.
+        try {
+          const parsed = JSON.parse(text);
+          if (parsed?.detail) detail += `：${parsed.detail}`;
+        } catch {
+          detail += `：${text.slice(0, 200)}`;
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -340,6 +433,23 @@ export async function* streamChat(
     if (buffer.trim()) {
       const event = parseEventBlock(buffer);
       if (event) yield event;
+    }
+  } catch (err) {
+    // Stream interrupted mid-flight (network drop, server closed connection
+    // without a proper end event). Distinguish from user abort — abort is
+    // silent, network errors surface a readable message so the user knows
+    // the answer was cut off.
+    if (signal?.aborted || (err instanceof DOMException && err.name === 'AbortError')) {
+      // no-op — the abort handler in useChat already marked the bubble.
+    } else {
+      yield {
+        event: 'error',
+        data: {
+          type: 'error',
+          code: 0,
+          message: '连接中断，回答可能不完整。请重新提问或刷新重试',
+        },
+      };
     }
   } finally {
     try {

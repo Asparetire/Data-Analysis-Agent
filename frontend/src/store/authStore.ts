@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { TokenResponse, UserView } from '../types';
 import {
+  changePassword as apiChangePassword,
   getCurrentUser as apiGetMe,
   login as apiLogin,
   logout as apiLogout,
@@ -57,6 +58,8 @@ interface AuthState {
   clearIfInvalid: () => void;
   /** Force a refresh-token rotation; returns the new access token or null. */
   tryRefresh: () => Promise<string | null>;
+  /** Verify old password and set a new one; clears must_change_password. */
+  changePassword: (oldPassword: string, newPassword: string) => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -170,5 +173,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
       return null;
     }
+  },
+
+  changePassword: async (oldPassword, newPassword) => {
+    await apiChangePassword(oldPassword, newPassword);
+    // Re-fetch /auth/me so must_change_password flips to false in state.
+    const user = await apiGetMe();
+    set({ user });
   },
 }));

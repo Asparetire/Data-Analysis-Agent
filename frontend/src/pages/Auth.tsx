@@ -1,9 +1,46 @@
 import { useState, type FormEvent } from 'react';
 import { Database, Loader2, AlertCircle } from 'lucide-react';
+import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 import { useT } from '../hooks/useUi';
 
 type Mode = 'login' | 'register';
+
+/**
+ * Map backend auth errors to readable Chinese. The raw axios error message
+ * is usually "Request failed with status code 401" — useless to a non-dev.
+ * FastAPI's 4xx bodies are `{"detail": "..."}`; we extract and humanize.
+ */
+function describeAuthError(err: unknown, mode: Mode): string {
+  if (axios.isAxiosError(err)) {
+    const status = err.response?.status;
+    const detail = err.response?.data?.detail;
+    if (status === 401) {
+      return mode === 'login' ? '邮箱或密码不正确' : '注册失败，请检查输入';
+    }
+    if (status === 409) {
+      return '该邮箱已注册，请直接登录';
+    }
+    if (status === 422) {
+      // FastAPI validation error — detail is an array of field errors.
+      if (Array.isArray(detail) && detail.length > 0) {
+        const first = detail[0];
+        if (first?.msg?.includes('email')) return '邮箱格式不正确';
+        if (first?.msg?.includes('password')) return '密码不符合要求（须含字母+数字，≥8 位）';
+      }
+      return '输入格式有误，请检查邮箱和密码';
+    }
+    if (status === 429) {
+      return '尝试过于频繁，请稍后再试';
+    }
+    if (status === 500) return '服务器异常，请稍后再试';
+    if (status === 0 || err.code === 'ERR_NETWORK') {
+      return '无法连接服务器，请检查网络';
+    }
+    if (typeof detail === 'string') return detail;
+  }
+  return err instanceof Error ? err.message : String(err);
+}
 
 export default function Auth() {
   const t = useT();
@@ -28,11 +65,11 @@ export default function Auth() {
         await login(email, password);
       }
     } catch (err) {
-      setLocalError(err instanceof Error ? err.message : String(err));
+      setLocalError(describeAuthError(err, mode));
     }
   };
 
-  const shownError = localError ?? error;
+  const shownError = localError ?? (error ? describeAuthError(error, mode) : null);
 
   return (
     <div className="auth-page">

@@ -4,6 +4,8 @@ import {
   AlertTriangle,
   ArrowDown,
   ArrowUp,
+  ChevronDown,
+  ChevronUp,
   ChevronLeft,
   ChevronRight,
   Database,
@@ -19,6 +21,24 @@ import { fetchRows, listTables, schemaDataSource, type RowsPage } from '../servi
 import { useT } from '../hooks/useUi';
 
 const PAGE_SIZE = 20;
+
+const RIGHT_PANEL_KEY = 'data-analysis-agent:rightPanelCollapsed';
+
+function readRightCollapsed(): boolean {
+  try {
+    return window.localStorage.getItem(RIGHT_PANEL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function writeRightCollapsed(v: boolean) {
+  try {
+    window.localStorage.setItem(RIGHT_PANEL_KEY, v ? '1' : '0');
+  } catch {
+    /* ignore */
+  }
+}
 
 interface TableMeta {
   name: string;
@@ -46,6 +66,15 @@ export default function Analysis() {
   const [sort, setSort] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [pageState, setPageState] = useState<PageState>({ loading: false, data: null });
+  const [collapsed, setCollapsed] = useState<boolean>(() => readRightCollapsed());
+
+  const toggleCollapsed = () => {
+    setCollapsed((v) => {
+      const next = !v;
+      writeRightCollapsed(next);
+      return next;
+    });
+  };
 
   // Load the table list + pick the primary table when the data source changes.
   useEffect(() => {
@@ -165,12 +194,47 @@ export default function Analysis() {
           tableCount={tables.length}
           rowCount={totalRows}
           schemaCount={columns.length}
+          collapsed={collapsed}
+          onToggleCollapse={toggleCollapsed}
         />
 
-        {!activeId ? (
+        {collapsed ? null : !activeId ? (
           <EmptyState />
         ) : tablesLoading ? (
-          <div style={{ color: 'var(--color-text-muted)' }}>{t('analysis.loading')}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 16 }}>
+            <div
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: 12,
+              }}
+            >
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="skeleton-bar"
+                  style={{ width: '80%', margin: '6px 0', height: 14 }}
+                />
+              ))}
+            </div>
+            <div
+              style={{
+                background: 'var(--color-surface)',
+                border: '1px solid var(--color-border)',
+                borderRadius: 'var(--radius-md)',
+                padding: 12,
+              }}
+            >
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="skeleton-bar"
+                  style={{ width: `${60 + (i % 4) * 10}%`, margin: '6px 0', height: 12 }}
+                />
+              ))}
+            </div>
+          </div>
         ) : pageState.error && !activeTable ? (
           <div className="upload-error">{t('analysis.error', { err: pageState.error })}</div>
         ) : (
@@ -222,11 +286,15 @@ function Header({
   tableCount,
   rowCount,
   schemaCount,
+  collapsed,
+  onToggleCollapse,
 }: {
   name?: string;
   tableCount: number;
   rowCount: number;
   schemaCount: number;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
 }) {
   const t = useT();
   return (
@@ -248,6 +316,29 @@ function Header({
           </span>
           <span>{t('analysis.tableRows', { n: rowCount })}</span>
         </div>
+      ) : null}
+      {name ? (
+        <button
+          type="button"
+          onClick={onToggleCollapse}
+          title={collapsed ? t('analysis.expand') : t('analysis.collapse')}
+          style={{
+            marginLeft: 'auto',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            padding: '4px 10px',
+            fontSize: 12,
+            border: '1px solid var(--color-border)',
+            borderRadius: 6,
+            background: 'var(--color-surface)',
+            color: 'var(--color-text-muted)',
+            cursor: 'pointer',
+          }}
+        >
+          {collapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          {collapsed ? t('analysis.expand') : t('analysis.collapse')}
+        </button>
       ) : null}
     </div>
   );
@@ -468,14 +559,27 @@ function DataTable({
           </thead>
           <tbody>
             {loading ? (
-              <tr>
-                <td
-                  colSpan={columns.length}
-                  style={{ padding: 16, color: 'var(--color-text-muted)', textAlign: 'center' }}
-                >
-                  {t('analysis.loading')}
-                </td>
-              </tr>
+              // Skeleton rows: 8 placeholder rows with shimmer bars. Gives
+              // the user a visual anchor that data is loading rather than a
+              // single "loading…" cell which looks like an empty table.
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`skeleton-${i}`}>
+                  {columns.map((c, j) => (
+                    <td
+                      key={c || j}
+                      style={{
+                        padding: '6px 8px',
+                        borderBottom: '1px solid var(--color-border)',
+                      }}
+                    >
+                      <div
+                        className="skeleton-bar"
+                        style={{ width: `${60 + ((i + j) % 4) * 10}%` }}
+                      />
+                    </td>
+                  ))}
+                </tr>
+              ))
             ) : rows.length === 0 ? (
               <tr>
                 <td

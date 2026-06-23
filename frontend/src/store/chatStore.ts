@@ -2,8 +2,10 @@ import { create } from 'zustand';
 import type { ChatMessage, DataSource, SessionView } from '../types';
 import {
   createSession as apiCreateSession,
+  deleteSession as apiDeleteSession,
   getDataSources as apiGetDataSources,
   getSession as apiGetSession,
+  listSessions as apiListSessions,
 } from '../services/api';
 
 export type PageKey = 'home' | 'analysis';
@@ -46,10 +48,22 @@ interface ChatState {
   sessionId: string | null;
   sessionReady: boolean;
   sessionError: string | null;
+  sessionCreatedAt: string | null;
   setSessionId: (id: string | null) => void;
   ensureSession: () => Promise<string>;
   restoreSession: (id: string) => Promise<SessionView | null>;
   resetSession: () => Promise<void>;
+  /** All live sessions owned by the current user, for the sidebar list. */
+  sessions: SessionView[];
+  loadSessions: () => Promise<void>;
+  /** Push the current session snapshot into the sessions list (used by newChat). */
+  upsertSession: (view: SessionView) => void;
+  /** Create a fresh session without dropping the old one from the list. */
+  newChat: () => Promise<void>;
+  /** Switch to an existing session by id (loads its messages + data source). */
+  switchSession: (id: string) => Promise<void>;
+  /** Delete a session server-side and remove it from the list. */
+  removeSession: (id: string) => Promise<void>;
 
   // Active data source (the "primary")
   activeDataSourceId: string | undefined;
@@ -88,6 +102,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: readStoredSessionId(),
   sessionReady: false,
   sessionError: null,
+  sessionCreatedAt: null,
+  sessions: [],
 
   setSessionId: (id) => {
     writeStoredSessionId(id);
@@ -99,7 +115,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (existing) return existing;
     const created = await apiCreateSession();
     writeStoredSessionId(created.session_id);
-    set({ sessionId: created.session_id, sessionReady: true, sessionError: null });
+    set({
+      sessionId: created.session_id,
+      sessionReady: true,
+      sessionError: null,
+      sessionCreatedAt: created.created_at ?? new Date().toISOString(),
+    });
     return created.session_id;
   },
 
@@ -131,6 +152,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         sessionId: view.session_id,
         sessionReady: true,
         sessionError: null,
+        sessionCreatedAt: view.created_at ?? null,
         messages: (view.chat_history || []).map(toChatMessage),
         activeDataSourceId: view.data_source_id || undefined,
         activeDataSourceName: dataSourceName,
@@ -149,6 +171,72 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({ sessionId: null, sessionReady: false, messages: [] });
     writeStoredSessionId(null);
     await get().ensureSession();
+  },
+
+  loadSessions: async () => {
+    try {
+      const list = await apiListSessions();
+      // Newest first — the backend returns insertion order which is
+      // creation order, but we want recency by updated_at to surface
+      // active conversations.
+      list.sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+      set({ sessions: list });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.warn('failed to load sessions', e);
+    }
+  },
+
+  upsertSession: (view) => {
+    set((s) => {
+      const others = s.sessions.filter((x) => x.session_id !== view.session_id);
+      return { sessions: [view, ...others] };
+    });
+  },
+
+  newChat: async () => {
+    // Preserve the current session in the sidebar list before minting a new
+    // one. We don't refetch the list here — loadSessions() is called by the
+    // sidebar when its sessions tab mounts, and restoreSession keeps the
+    // entry fresh on switch.
+    const currentId = get().sessionId;
+    if (currentId) {
+      try {
+        const view = await apiGetSession(currentId);
+        get().upsertSession(view);
+      } catch {
+        /* session may already be gone — fine */
+      }
+    }
+    const created = await apiCreateSession();
+    writeStoredSessionId(created.session_id);
+    set({
+      sessionId: created.session_id,
+      sessionReady: true,
+      sessionError: null,
+      sessionCreatedAt: created.created_at ?? new Date().toISOString(),
+      messages: [],
+      activeDataSourceId: undefined,
+      activeDataSourceName: '',
+      boundDataSourceIds: [],
+    });
+  },
+
+  switchSession: async (id) => {
+    await get().restoreSession(id);
+  },
+
+  removeSession: async (id) => {
+    try {
+      await apiDeleteSession(id);
+    } catch {
+      /* server may have already expired it — drop from list regardless */
+    }
+    set((s) => ({ sessions: s.sessions.filter((x) => x.session_id !== id) }));
+    // If we just deleted the active session, mint a fresh one.
+    if (get().sessionId === id) {
+      await get().newChat();
+    }
   },
 
   activeDataSourceId: undefined,

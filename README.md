@@ -75,7 +75,7 @@ docker compose up --build
 必填 env（启动校验会拒绝占位符）：
 
 - `JWT_SECRET` ≥32 字节
-- `MIGRATION_ADMIN_PASSWORD` ≥12 字节
+- `MIGRATION_ADMIN_PASSWORD` ≥12 字节、含字母+数字
 - `MINIO_ROOT_PASSWORD` ≥8 字符
 - `OPENAI_API_KEY`（或 `ANTHROPIC_API_KEY`，看 `LLM_PROVIDER`）
 - `METRICS_ALLOW_CIDR` — Prometheus scraper 的 CIDR（默认仅 loopback）

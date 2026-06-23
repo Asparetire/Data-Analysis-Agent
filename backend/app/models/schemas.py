@@ -39,6 +39,14 @@ class UserView(BaseModel):
     id: str
     email: str
     is_active: bool = True
+    must_change_password: bool = False
+
+
+class ChangePasswordRequest(BaseModel):
+    """POST /auth/change-password body."""
+
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
 
 
 class ChatMessageItem(BaseModel):
