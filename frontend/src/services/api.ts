@@ -277,22 +277,43 @@ export async function* streamChat(
     'Content-Type': 'application/json',
     Accept: 'text/event-stream',
   };
-  try {
-    const token = window.localStorage.getItem('data-analysis-agent:accessToken');
-    if (token) headers.Authorization = `Bearer ${token}`;
-  } catch {
-    /* ignore */
-  }
+  const readToken = () => {
+    try {
+      return window.localStorage.getItem('data-analysis-agent:accessToken');
+    } catch {
+      return null;
+    }
+  };
+  let token = readToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  const doFetch = () =>
+    fetch(`${API_BASE_URL}/chat/stream`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal,
+    });
+
   // Phase 6: pass the abort signal through to fetch so the TCP connection
   // actually closes when the user cancels. Without this the backend keeps
   // running the graph (and burning LLM tokens) until it finishes — the
   // previous "abort" only stopped the client from iterating events.
-  const response = await fetch(`${API_BASE_URL}/chat/stream`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-    signal,
-  });
+  let response = await doFetch();
+
+  // SSE bypasses the axios interceptor (we use fetch for streaming), so we
+  // handle the 401-expired-token case here: rotate the refresh token once,
+  // then retry the stream. Matches what the axios interceptor does for
+  // regular requests.
+  if (response.status === 401) {
+    const { useAuthStore } = await import('../store/authStore');
+    const newToken = await useAuthStore.getState().tryRefresh();
+    if (newToken) {
+      token = newToken;
+      headers.Authorization = `Bearer ${newToken}`;
+      response = await doFetch();
+    }
+  }
 
   if (!response.ok || !response.body) {
     let detail = `HTTP ${response.status}`;

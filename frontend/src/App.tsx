@@ -9,6 +9,8 @@ import {
   Menu,
   X,
   LogOut,
+  Plus,
+  Upload as UploadIcon,
 } from 'lucide-react';
 import { useChatStore, type PageKey } from './store/chatStore';
 import { useAuthStore } from './store/authStore';
@@ -27,15 +29,22 @@ export default function App() {
   const page = useChatStore((s) => s.page);
   const setPage = useChatStore((s) => s.setPage);
   const activeId = useChatStore((s) => s.activeDataSourceId);
-  const setActive = useChatStore((s) => s.setActiveDataSource);
   const sessionId = useChatStore((s) => s.sessionId);
   const ensureSession = useChatStore((s) => s.ensureSession);
   const restoreSession = useChatStore((s) => s.restoreSession);
   const { sendMessage } = useChat();
   const { status, reset } = useUpload();
+  const resetSession = useChatStore((s) => s.resetSession);
   const t = useT();
   const [theme] = useTheme();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  const triggerNewChat = () => {
+    if (status === 'uploading') return;
+    void resetSession();
+    setPage('home');
+  };
 
   // Phase 4A: bootstrap auth on mount. While status is loading we show a
   // splash; once it resolves to 'guest' we render the Auth page; only when
@@ -127,6 +136,25 @@ export default function App() {
               </button>
             ))}
           </nav>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setUploadOpen(true)}
+            title={t('nav.upload')}
+            aria-label={t('nav.upload')}
+            disabled={status === 'uploading'}
+          >
+            <UploadIcon size={16} />
+          </button>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={triggerNewChat}
+            title={t('nav.newChat')}
+            aria-label={t('nav.newChat')}
+          >
+            <Plus size={16} />
+          </button>
           {authUser ? (
             <span className="auth-user" title={authUser.email}>
               {authUser.email}
@@ -180,22 +208,6 @@ export default function App() {
         <Sidebar drawerOpen={drawerOpen} onClose={() => setDrawerOpen(false)} />
 
         <section className="chat-section">
-          {page === 'home' && !activeId && (status === 'idle' || status === 'error') ? (
-            <div
-              style={{
-                padding: 20,
-                borderBottom: '1px solid var(--color-border)',
-                background: 'var(--color-surface)',
-              }}
-            >
-              <FileUpload
-                onUploadSuccess={(fileId, filename) => {
-                  setActive({ id: fileId, name: filename });
-                }}
-              />
-            </div>
-          ) : null}
-
           <ErrorBoundary>{<Page />}</ErrorBoundary>
 
           {status === 'uploading' ? (
@@ -234,6 +246,38 @@ export default function App() {
           ) : null}
         </section>
       </main>
+
+      {uploadOpen ? (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => status !== 'uploading' && setUploadOpen(false)}
+        >
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
+            <div className="modal-title" style={{ justifyContent: 'space-between' }}>
+              <span>{t('nav.upload')}</span>
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={() => status !== 'uploading' && setUploadOpen(false)}
+                aria-label={t('common.cancel')}
+                disabled={status === 'uploading'}
+              >
+                <X size={14} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <FileUpload
+                onUploadSuccess={() => {
+                  setUploadOpen(false);
+                  setPage('home');
+                }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
