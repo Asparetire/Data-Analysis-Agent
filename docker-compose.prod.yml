@@ -30,7 +30,7 @@ services:
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET is required (>=32 bytes)}
       - ACCESS_TOKEN_TTL_MINUTES=${ACCESS_TOKEN_TTL_MINUTES:-15}
       - REFRESH_TOKEN_TTL_DAYS=${REFRESH_TOKEN_TTL_DAYS:-7}
-      - MIGRATION_ADMIN_EMAIL=${MIGRATION_ADMIN_EMAIL:-admin@local.invalid}
+      - MIGRATION_ADMIN_EMAIL=${MIGRATION_ADMIN_EMAIL:-admin@local.dev}
       - MIGRATION_ADMIN_PASSWORD=${MIGRATION_ADMIN_PASSWORD:?MIGRATION_ADMIN_PASSWORD is required (>=12 bytes)}
       - RATE_LIMIT_PER_USER_PER_MINUTE=${RATE_LIMIT_PER_USER_PER_MINUTE:-60}
       - RATE_LIMIT_PER_IP_PER_MINUTE=${RATE_LIMIT_PER_IP_PER_MINUTE:-20}
@@ -39,9 +39,9 @@ services:
       - LLM_REQUEST_TIMEOUT_S=${LLM_REQUEST_TIMEOUT_S:-60.0}
       - LOG_FORMAT=${LOG_FORMAT:-json}
       - REDIS_URL=redis://redis:6379/0
-      - DATABASE_URL=sqlite:///app/data/main.db
+      - DATABASE_URL=sqlite:////app/data/main.db
       - DATA_DIR=/app/data
-      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost"]}
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost","http://127.0.0.1"]}
     volumes:
       - backend_data:/app/data
     depends_on:
@@ -83,7 +83,7 @@ services:
     image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
     command: python scripts/backup.py
     environment:
-      - DATABASE_URL=sqlite:///app/data/main.db
+      - DATABASE_URL=sqlite:////app/data/main.db
       - REDIS_URL=redis://redis:6379/0
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}
@@ -104,7 +104,7 @@ services:
     image: ghcr.io/${IMAGE_OWNER:-aasparetire}/data-analysis-agent-backend:${IMAGE_TAG:-latest}
     command: python scripts/restore.py
     environment:
-      - DATABASE_URL=sqlite:///app/data/main.db
+      - DATABASE_URL=sqlite:////app/data/main.db
       - REDIS_URL=redis://redis:6379/0
       - MINIO_ENDPOINT=http://minio:9000
       - MINIO_ACCESS_KEY=${MINIO_ROOT_USER:-minioadmin}

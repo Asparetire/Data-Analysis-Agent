@@ -67,7 +67,7 @@ class Settings(BaseSettings):
 
     # 首次启动且 main.db 中已有无主数据源时，把它们绑定到这个默认用户。
     # 仅在迁移路径下创建；之后用户应自行注册。
-    MIGRATION_ADMIN_EMAIL: str = "admin@local.invalid"
+    MIGRATION_ADMIN_EMAIL: str = "admin@local.dev"
     MIGRATION_ADMIN_PASSWORD: str = "change-me-now"
 
     # Phase 4B: 限流（按用户 / 按 IP 的 sliding window，每分钟）

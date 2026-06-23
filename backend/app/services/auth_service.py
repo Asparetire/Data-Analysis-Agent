@@ -345,7 +345,20 @@ def migrate_ownerless_data() -> int:
 
     admin = get_user_by_email(settings.MIGRATION_ADMIN_EMAIL)
     if admin is None:
-        return 0
+        # A user registered before the migration admin was created (e.g. the
+        # first /auth/register call landed before startup finished). Create
+        # the admin now so ownerless data has a valid owner to stamp.
+        try:
+            register(settings.MIGRATION_ADMIN_EMAIL, settings.MIGRATION_ADMIN_PASSWORD)
+            logger.warning(
+                "Created migration admin %s — change its password immediately.",
+                settings.MIGRATION_ADMIN_EMAIL,
+            )
+        except EmailExists:
+            pass
+        admin = get_user_by_email(settings.MIGRATION_ADMIN_EMAIL)
+        if admin is None:
+            return 0
 
     # Walk the sidecar; any entry missing owner_id gets stamped.
     stamped = metadata_service.assign_owner_to_ownerless(admin["id"])

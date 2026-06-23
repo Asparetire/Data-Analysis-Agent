@@ -232,7 +232,7 @@ readinessProbe:
 部署前过一遍：
 
 - [ ] `JWT_SECRET` ≥32 字节且非占位符（启动校验会拒绝）
-- [ ] `MIGRATION_ADMIN_PASSWORD` ≥12 字节且非占位符
+- [ ] `MIGRATION_ADMIN_PASSWORD` ≥12 字节、非占位符、含字母+数字（register() 复杂度策略）
 - [ ] `MINIO_ROOT_PASSWORD` ≥8 字符
 - [ ] `LLM_PROVIDER` + 对应 API key 配置正确
 - [ ] `METRICS_ALLOW_CIDR` 设为 Prometheus 的 CIDR（默认仅 loopback）
